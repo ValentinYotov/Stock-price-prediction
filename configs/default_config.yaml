@@ -1,12 +1,20 @@
 # Default Configuration File
 
 data:
-  dataset_name: "ykotseruba/stock-prices-daily"  # Ще се промени според избрания dataset
+  dataset_name: "paperswithbacktest/Stocks-Daily-Price"
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15
   context_length: 90  # Брой дни история
   prediction_horizon: 1  # Брой дни за прогноза
+  tickers:
+    - "AAPL"
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "META"
+  start_date: "2010-01-01"
+  end_date: null
   
   features:
     technical_indicators: true

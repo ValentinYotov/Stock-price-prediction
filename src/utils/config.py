@@ -8,14 +8,12 @@ from typing import Any, Dict, List, Mapping, Optional
 import yaml
 
 
-# Път до конфигурационния файл по подразбиране
-DEFAULT_CONFIG_PATH = Path("configs") / "default_config.yaml"
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default_config.yaml"
 
 
 @dataclass
 class DataFeaturesConfig:
-    """Настройки, свързани с feature engineering за входните данни."""
-
     technical_indicators: bool = True
     lag_features: bool = True
     temporal_features: bool = True
@@ -33,19 +31,22 @@ class DataFeaturesConfig:
 
 @dataclass
 class DataConfig:
-    """Настройки за данните и dataset-а."""
-
     dataset_name: str = "paperswithbacktest/Stocks-Daily-Price"
     train_split: float = 0.7
     val_split: float = 0.15
     test_split: float = 0.15
     context_length: int = 90
     prediction_horizon: int = 1
+    tickers: Optional[List[str]] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     features: DataFeaturesConfig = field(default_factory=DataFeaturesConfig)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DataConfig":
         features_cfg = DataFeaturesConfig.from_dict(data.get("features", {}))
+        raw_tickers = data.get("tickers")
+        tickers = list(raw_tickers) if raw_tickers is not None else None
 
         return cls(
             dataset_name=str(
@@ -56,15 +57,16 @@ class DataConfig:
             test_split=float(data.get("test_split", 0.15)),
             context_length=int(data.get("context_length", 90)),
             prediction_horizon=int(data.get("prediction_horizon", 1)),
+            tickers=tickers,
+            start_date=data.get("start_date"),
+            end_date=data.get("end_date"),
             features=features_cfg,
         )
 
 
 @dataclass
 class ModelConfig:
-    """Настройки за модела (архитектура)."""
-
-    type: str = "transformer"  # transformer, lstm, linear
+    type: str = "transformer"
     d_model: int = 256
     n_heads: int = 8
     n_layers: int = 6
@@ -87,8 +89,6 @@ class ModelConfig:
 
 @dataclass
 class EarlyStoppingConfig:
-    """Настройки за early stopping по време на обучение."""
-
     patience: int = 10
     min_delta: float = 1e-4
 
@@ -102,8 +102,6 @@ class EarlyStoppingConfig:
 
 @dataclass
 class OptimizerParamsConfig:
-    """Допълнителни параметри за оптимизатора."""
-
     betas: List[float] = field(default_factory=lambda: [0.9, 0.999])
     weight_decay: float = 0.0
 
@@ -117,8 +115,6 @@ class OptimizerParamsConfig:
 
 @dataclass
 class TrainingConfig:
-    """Настройки за тренировъчния процес."""
-
     batch_size: int = 32
     learning_rate: float = 1e-4
     num_epochs: int = 100
@@ -157,8 +153,6 @@ class TrainingConfig:
 
 @dataclass
 class EvaluationConfig:
-    """Настройки за оценка и визуализация."""
-
     metrics: List[str] = field(
         default_factory=lambda: ["mae", "rmse", "mape", "r2", "directional_accuracy"]
     )
@@ -181,8 +175,6 @@ class EvaluationConfig:
 
 @dataclass
 class PathsConfig:
-    """Пътища до основните директории в проекта."""
-
     data_dir: Path = Path("data")
     models_dir: Path = Path("models") / "checkpoints"
     results_dir: Path = Path("results")
@@ -198,8 +190,6 @@ class PathsConfig:
 
 @dataclass
 class Config:
-    """Глобален конфигурационен обект за проекта."""
-
     data: DataConfig
     model: ModelConfig
     training: TrainingConfig
@@ -208,7 +198,6 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Config":
-        """Създава Config от суров речник (пр. YAML)."""
         return cls(
             data=DataConfig.from_dict(data.get("data", {})),
             model=ModelConfig.from_dict(data.get("model", {})),
@@ -219,7 +208,6 @@ class Config:
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
-    """Зарежда YAML файл и връща съдържанието като речник."""
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
@@ -227,7 +215,6 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
         data = yaml.safe_load(f)
 
     if data is None:
-        # Празен YAML файл
         return {}
 
     if not isinstance(data, dict):
@@ -237,12 +224,22 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 
 
 def load_config(path: Optional[str] = None) -> Config:
-    """
-    Зарежда конфигурация от YAML файл и връща `Config` обект.
-
-    :param path: Път към YAML файл. Ако е None, ползва DEFAULT_CONFIG_PATH.
-    """
-    config_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    if path is not None:
+        config_path = Path(path).resolve()
+    else:
+        config_path = DEFAULT_CONFIG_PATH
+        if not config_path.exists():
+            current = Path.cwd()
+            search_paths = [
+                current / "configs" / "default_config.yaml",
+                current.parent / "configs" / "default_config.yaml",
+                PROJECT_ROOT / "configs" / "default_config.yaml",
+            ]
+            for search_path in search_paths:
+                resolved = search_path.resolve()
+                if resolved.exists():
+                    config_path = resolved
+                    break
     raw = _load_yaml(config_path)
     return Config.from_dict(raw)
 
