@@ -1,0 +1,50 @@
+# Default Configuration File
+
+data:
+  dataset_name: "ykotseruba/stock-prices-daily"  # Ще се промени според избрания dataset
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  context_length: 90  # Брой дни история
+  prediction_horizon: 1  # Брой дни за прогноза
+  
+  features:
+    technical_indicators: true
+    lag_features: true
+    temporal_features: true
+    windows: [5, 10, 20, 50]  # Windows за moving averages
+
+model:
+  type: "transformer"  # transformer, lstm, linear
+  d_model: 256
+  n_heads: 8
+  n_layers: 6
+  d_ff: 1024
+  dropout: 0.1
+  activation: "gelu"
+
+training:
+  batch_size: 32
+  learning_rate: 0.0001
+  num_epochs: 100
+  optimizer: "adam"
+  optimizer_params:
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+  scheduler: "cosine"
+  gradient_clip: 1.0
+  early_stopping:
+    patience: 10
+    min_delta: 0.0001
+  
+  device: "cuda"  # cuda или cpu
+
+evaluation:
+  metrics: ["mae", "rmse", "mape", "r2", "directional_accuracy"]
+  save_predictions: true
+  visualize: true
+
+paths:
+  data_dir: "data"
+  models_dir: "models/checkpoints"
+  results_dir: "results"
