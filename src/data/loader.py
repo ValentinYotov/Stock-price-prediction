@@ -15,12 +15,37 @@ def load_raw_dataset(
     if config is None:
         config = load_config()
     dataset_name = config.data.dataset_name
+    
+    print(f"Зареждане на dataset: {dataset_name}")
+    print("Това може да отнеме няколко минути при първо зареждане...")
+    
     dataset = load_dataset(dataset_name)
     if split is None:
         split_name = list(dataset.keys())[0]
     else:
         split_name = split
+    
+    print(f"Dataset зареден. Конвертиране в pandas...")
     df = dataset[split_name].to_pandas()
+    print(f"Конвертирано! Размер: {df.shape}")
+    
+    column_mapping = {
+        "Ticker": "symbol",
+        "Date": "date",
+        "Open": "open",
+        "Close": "close",
+        "Volume": "volume",
+    }
+    
+    for old_col, new_col in column_mapping.items():
+        if old_col in df.columns and new_col not in df.columns:
+            df = df.rename(columns={old_col: new_col})
+    
+    if "high" not in df.columns and "open" in df.columns and "close" in df.columns:
+        df["high"] = df[["open", "close"]].max(axis=1)
+    if "low" not in df.columns and "open" in df.columns and "close" in df.columns:
+        df["low"] = df[["open", "close"]].min(axis=1)
+    
     return df
 
 
@@ -62,6 +87,12 @@ def load_and_filter_dataset(
     if end_date is None:
         end_date = config.data.end_date
     df = load_raw_dataset(config=config, split=split)
+    if "Ticker" in df.columns and "symbol" not in df.columns:
+        df = df.rename(columns={"Ticker": "symbol"})
+    if "Date" in df.columns and "date" not in df.columns:
+        df = df.rename(columns={"Date": "date"})
+    
+    print(f"Филтриране на данни... Първоначален размер: {df.shape}")
     df = filter_by_tickers_and_dates(
         df,
         tickers=tickers,
@@ -70,6 +101,7 @@ def load_and_filter_dataset(
         symbol_column="symbol",
         date_column="date",
     )
+    print(f"Филтрирано! Финален размер: {df.shape}")
     return df
 
 

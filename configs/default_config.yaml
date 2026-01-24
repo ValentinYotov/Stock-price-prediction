@@ -1,7 +1,7 @@
 # Default Configuration File
 
 data:
-  dataset_name: "paperswithbacktest/Stocks-Daily-Price"
+  dataset_name: "pmoe7/SP_500_Stocks_Data-ratios_news_price_10_yrs"
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15
