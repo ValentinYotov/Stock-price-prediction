@@ -69,6 +69,7 @@ class Trainer:
     
     def train_epoch(self) -> float:
         import sys
+        import gc
         self.model.train()
         total_loss = 0.0
         num_batches = 0
@@ -103,6 +104,11 @@ class Trainer:
                     
                     total_loss += loss.item()
                     num_batches += 1
+                    
+                    # Clean up memory every 10 batches
+                    if (batch_idx + 1) % 10 == 0:
+                        del predictions, loss
+                        gc.collect()
                         
                 except Exception as e:
                     print(f"\nГРЕШКА в batch {batch_idx + 1}: {e}", flush=True)

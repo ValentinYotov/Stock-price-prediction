@@ -17,6 +17,7 @@ class DataFeaturesConfig:
     technical_indicators: bool = True
     lag_features: bool = True
     temporal_features: bool = True
+    simplified: bool = False
     windows: List[int] = field(default_factory=lambda: [5, 10, 20, 50])
 
     @classmethod
@@ -25,6 +26,7 @@ class DataFeaturesConfig:
             technical_indicators=bool(data.get("technical_indicators", True)),
             lag_features=bool(data.get("lag_features", True)),
             temporal_features=bool(data.get("temporal_features", True)),
+            simplified=bool(data.get("simplified", False)),
             windows=list(data.get("windows", [5, 10, 20, 50])),
         )
 

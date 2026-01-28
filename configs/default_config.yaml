@@ -20,7 +20,8 @@ data:
     technical_indicators: true
     lag_features: true
     temporal_features: true
-    windows: [5, 10, 20, 50]  # Windows за moving averages
+    simplified: true  # Използва опростена версия с ~15-20 features вместо 59
+    windows: [5, 10, 20, 50]  # Windows за moving averages (използва се само ако simplified=false)
 
 model:
   type: "transformer"  # transformer, lstm, linear

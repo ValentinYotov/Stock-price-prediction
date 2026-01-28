@@ -170,28 +170,75 @@ def create_all_features(
     add_lags: bool = True,
     add_temporal: bool = True,
     add_volume: bool = True,
+    simplified: bool = False,  # Нова опция за опростена версия
 ) -> pd.DataFrame:
     result = df.copy()
     
-    if add_technical:
-        result = add_moving_averages(result, price_column, windows)
+    if simplified:
+        # Опростена версия с само най-важните features (~15-20 features)
+        # Основни цени
+        if price_column not in result.columns:
+            result[price_column] = result[high_column]  # Fallback
+        
+        # Само най-важните moving averages
+        result[f"sma_20"] = calculate_sma(result, price_column, 20)
+        result[f"ema_20"] = calculate_ema(result, price_column, 20)
+        
+        # RSI за momentum
         result = add_rsi(result, price_column)
-        result = add_macd(result, price_column)
-        result = add_bollinger_bands(result, price_column)
+        
+        # MACD за trend
+        macd, signal, _ = calculate_macd(result, price_column)
+        result["macd"] = macd
+        result["macd_signal"] = signal
+        
+        # Bollinger Bands position (нормализирана позиция)
+        upper, middle, lower = calculate_bollinger_bands(result, price_column, 20)
+        result[f"bb_position_20"] = (result[price_column] - lower) / (upper - lower + 1e-8)
+        
+        # ATR за volatility
         if high_column in result.columns and low_column in result.columns:
             result["atr"] = calculate_atr(result, high_column, low_column, price_column)
-    
-    if add_lags:
-        lag_columns = [price_column]
-        if volume_column in result.columns:
-            lag_columns.append(volume_column)
-        result = add_lag_features(result, lag_columns, lags, group_by=symbol_column)
-    
-    if add_temporal:
-        result = add_temporal_features(result, date_column)
-    
-    if add_volume:
-        result = add_volume_features(result, volume_column)
+        
+        # Само 1 lag feature (Transformer attention покрива останалите)
+        if add_lags:
+            if symbol_column:
+                result[f"{price_column}_lag_1"] = result.groupby(symbol_column)[price_column].shift(1)
+            else:
+                result[f"{price_column}_lag_1"] = result[price_column].shift(1)
+        
+        # Volume ratio
+        if add_volume and volume_column in result.columns:
+            result["volume_sma_20"] = calculate_sma(result, volume_column, 20)
+            result["volume_ratio"] = result[volume_column] / (result["volume_sma_20"] + 1e-8)
+        
+        # Минимални temporal features
+        if add_temporal and date_column in result.columns:
+            result[date_column] = pd.to_datetime(result[date_column])
+            result["day_of_week"] = result[date_column].dt.dayofweek
+            result["month"] = result[date_column].dt.month
+        
+    else:
+        # Пълна версия (оригинална)
+        if add_technical:
+            result = add_moving_averages(result, price_column, windows)
+            result = add_rsi(result, price_column)
+            result = add_macd(result, price_column)
+            result = add_bollinger_bands(result, price_column)
+            if high_column in result.columns and low_column in result.columns:
+                result["atr"] = calculate_atr(result, high_column, low_column, price_column)
+        
+        if add_lags:
+            lag_columns = [price_column]
+            if volume_column in result.columns:
+                lag_columns.append(volume_column)
+            result = add_lag_features(result, lag_columns, lags, group_by=symbol_column)
+        
+        if add_temporal:
+            result = add_temporal_features(result, date_column)
+        
+        if add_volume:
+            result = add_volume_features(result, volume_column)
     
     return result
 

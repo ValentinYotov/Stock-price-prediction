@@ -37,6 +37,7 @@ def extract_dataset(
         symbol_column=symbol_column,
     )
     
+    simplified = getattr(config.data.features, 'simplified', False)
     df = create_all_features(
         df,
         price_column=price_column,
@@ -51,6 +52,7 @@ def extract_dataset(
         add_lags=config.data.features.lag_features,
         add_temporal=config.data.features.temporal_features,
         add_volume=True,
+        simplified=config.data.features.simplified,
     )
     
     df = df.dropna()
