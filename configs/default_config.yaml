@@ -21,6 +21,8 @@ data:
     lag_features: true
     temporal_features: true
     simplified: true  # Използва опростена версия с ~15-20 features вместо 59
+    normalize: true  # Нормализира features и target заедно
+    normalize_method: "standard"  # standard или minmax
     windows: [5, 10, 20, 50]  # Windows за moving averages (използва се само ако simplified=false)
 
 model:

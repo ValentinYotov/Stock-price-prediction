@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Optional
 
 import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 from src.data.dataset import prepare_dataset, StockDataset
 from src.data.feature_engineering import create_all_features
@@ -62,6 +64,31 @@ def extract_dataset(
         if col not in [date_column, symbol_column, price_column]
         and df[col].dtype in ['float64', 'int64', 'float32', 'int32']
     ]
+    
+    # Нормализация на features и target заедно (ако е включена)
+    if config.data.features.normalize:
+        all_numeric_cols = feature_columns + [price_column]
+        
+        if config.data.features.normalize_method == "minmax":
+            scaler = MinMaxScaler()
+        else:
+            scaler = StandardScaler()
+        
+        # Fit на train данните (временно split за fit на scaler)
+        from src.data.dataset import time_series_split
+        train_df, _, _ = time_series_split(
+            df, 
+            train_split=config.data.train_split, 
+            val_split=config.data.val_split, 
+            test_split=config.data.test_split,
+            date_column=date_column,
+            symbol_column=symbol_column
+        )
+        
+        scaler.fit(train_df[all_numeric_cols])
+        
+        # Transform на всички данни
+        df[all_numeric_cols] = scaler.transform(df[all_numeric_cols])
     
     return df, feature_columns
 

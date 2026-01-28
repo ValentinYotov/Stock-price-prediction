@@ -18,6 +18,8 @@ class DataFeaturesConfig:
     lag_features: bool = True
     temporal_features: bool = True
     simplified: bool = False
+    normalize: bool = True
+    normalize_method: str = "standard"
     windows: List[int] = field(default_factory=lambda: [5, 10, 20, 50])
 
     @classmethod
@@ -27,6 +29,8 @@ class DataFeaturesConfig:
             lag_features=bool(data.get("lag_features", True)),
             temporal_features=bool(data.get("temporal_features", True)),
             simplified=bool(data.get("simplified", False)),
+            normalize=bool(data.get("normalize", True)),
+            normalize_method=str(data.get("normalize_method", "standard")),
             windows=list(data.get("windows", [5, 10, 20, 50])),
         )
 
