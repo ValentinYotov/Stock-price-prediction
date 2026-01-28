@@ -16,18 +16,37 @@ def load_raw_dataset(
         config = load_config()
     dataset_name = config.data.dataset_name
     
-    print(f"Зареждане на dataset: {dataset_name}")
-    print("Това може да отнеме няколко минути при първо зареждане...")
+    local_file = Path("data/raw/sp500_stocks_data.parquet")
     
-    dataset = load_dataset(dataset_name)
-    if split is None:
-        split_name = list(dataset.keys())[0]
+    if local_file.exists():
+        print(f"Зареждане на локален dataset от: {local_file}")
+        df = pd.read_parquet(local_file)
+        print(f"Заредено! Размер: {df.shape}")
     else:
-        split_name = split
-    
-    print(f"Dataset зареден. Конвертиране в pandas...")
-    df = dataset[split_name].to_pandas()
-    print(f"Конвертирано! Размер: {df.shape}")
+        print(f"Зареждане на dataset от Hugging Face: {dataset_name}")
+        print("Това може да отнеме няколко минути при първо зареждане...")
+        
+        try:
+            dataset = load_dataset(dataset_name, download_mode="reuse_cache_if_exists")
+        except Exception as e:
+            print(f"Грешка при зареждане: {e}")
+            print("Опитвам се да заредя без download_mode...")
+            try:
+                dataset = load_dataset(dataset_name)
+            except Exception as e2:
+                print(f"Грешка: {e2}")
+                print("\nПроблем: Не може да се свърже с Hugging Face Hub.")
+                print(f"Моля, свали dataset-а ръчно в notebook-а и запази го в: {local_file}")
+                raise
+        
+        if split is None:
+            split_name = list(dataset.keys())[0]
+        else:
+            split_name = split
+        
+        print(f"Dataset зареден. Конвертиране в pandas...")
+        df = dataset[split_name].to_pandas()
+        print(f"Конвертирано! Размер: {df.shape}")
     
     column_mapping = {
         "Ticker": "symbol",
