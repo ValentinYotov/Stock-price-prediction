@@ -154,6 +154,7 @@ class Trainer:
     
     def train(self) -> dict:
         import sys
+        import time
         best_val_loss = float('inf')
         
         print(f"Започване на обучение за {self.config.training.num_epochs} epochs...")
@@ -162,12 +163,14 @@ class Trainer:
         try:
             for epoch in range(self.config.training.num_epochs):
                 try:
+                    epoch_start_time = time.time()
                     print(f"\nEpoch {epoch+1}/{self.config.training.num_epochs}...", end=" ", flush=True)
                     train_loss = self.train_epoch()
                     print(f"Train loss: {train_loss:.6f}", end=" ", flush=True)
                     
                     val_loss = self.validate()
-                    print(f"Val loss: {val_loss:.6f}", flush=True)
+                    epoch_time = time.time() - epoch_start_time
+                    print(f"Val loss: {val_loss:.6f} ({epoch_time:.1f}s)", flush=True)
                     
                     self.train_losses.append(train_loss)
                     self.val_losses.append(val_loss)
