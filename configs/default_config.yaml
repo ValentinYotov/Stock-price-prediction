@@ -5,7 +5,7 @@ data:
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15
-  context_length: 90  # Брой дни история
+  context_length: 60  # Брой дни история (намалено от 90 за по-бързо обучение)
   prediction_horizon: 1  # Брой дни за прогноза
   tickers:
     - "AAPL"
@@ -24,17 +24,17 @@ data:
 
 model:
   type: "transformer"  # transformer, lstm, linear
-  d_model: 256
-  n_heads: 8
-  n_layers: 6
-  d_ff: 1024
+  d_model: 128  # Намалено от 256 за по-бързо обучение
+  n_heads: 4  # Намалено от 8 за по-бързо обучение
+  n_layers: 4  # Намалено от 6 за по-бързо обучение
+  d_ff: 512  # Намалено от 1024 за по-бързо обучение
   dropout: 0.1
   activation: "gelu"
 
 training:
-  batch_size: 32
+  batch_size: 64  # Увеличено от 32 за по-бързо обучение
   learning_rate: 0.0001
-  num_epochs: 100
+  num_epochs: 50  # Намалено от 100 за по-бързо обучение
   optimizer: "adam"
   optimizer_params:
     betas: [0.9, 0.999]
@@ -42,7 +42,7 @@ training:
   scheduler: "cosine"
   gradient_clip: 1.0
   early_stopping:
-    patience: 10
+    patience: 5  # Намалено от 10 за по-бързо спиране ако няма подобрение
     min_delta: 0.0001
   
   device: "cuda"  # cuda или cpu

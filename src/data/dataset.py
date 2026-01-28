@@ -70,7 +70,11 @@ class StockDataset(Dataset):
     
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         x = torch.FloatTensor(self.data[idx])
-        y = torch.FloatTensor(self.targets[idx])
+        y_target = self.targets[idx]
+        if isinstance(y_target, (int, float, np.number)):
+            y = torch.FloatTensor([y_target])
+        else:
+            y = torch.FloatTensor(y_target)
         return x, y
 
 
@@ -105,7 +109,12 @@ def prepare_dataset(
         prediction_horizon,
     )
     train_X = train_X[:, :, :-1]
-    train_y = train_y[:, :, -1] if prediction_horizon > 1 else train_y[:, -1, -1]
+    if prediction_horizon > 1:
+        train_y = train_y[:, :, -1]
+    else:
+        train_y = train_y[:, -1, -1]
+        if train_y.ndim == 0:
+            train_y = train_y.reshape(-1, 1)
     
     val_X, val_y = create_sequences(
         np.column_stack([val_data, val_targets]),
@@ -113,7 +122,12 @@ def prepare_dataset(
         prediction_horizon,
     )
     val_X = val_X[:, :, :-1]
-    val_y = val_y[:, :, -1] if prediction_horizon > 1 else val_y[:, -1, -1]
+    if prediction_horizon > 1:
+        val_y = val_y[:, :, -1]
+    else:
+        val_y = val_y[:, -1, -1]
+        if val_y.ndim == 0:
+            val_y = val_y.reshape(-1, 1)
     
     test_X, test_y = create_sequences(
         np.column_stack([test_data, test_targets]),
@@ -121,7 +135,12 @@ def prepare_dataset(
         prediction_horizon,
     )
     test_X = test_X[:, :, :-1]
-    test_y = test_y[:, :, -1] if prediction_horizon > 1 else test_y[:, -1, -1]
+    if prediction_horizon > 1:
+        test_y = test_y[:, :, -1]
+    else:
+        test_y = test_y[:, -1, -1]
+        if test_y.ndim == 0:
+            test_y = test_y.reshape(-1, 1)
     
     train_dataset = StockDataset(train_X, train_y, context_length, prediction_horizon)
     val_dataset = StockDataset(val_X, val_y, context_length, prediction_horizon)

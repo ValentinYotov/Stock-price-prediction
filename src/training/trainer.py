@@ -68,37 +68,55 @@ class Trainer:
         self.val_losses = []
     
     def train_epoch(self) -> float:
+        import sys
         self.model.train()
         total_loss = 0.0
         num_batches = 0
+        total_batches = len(self.train_loader)
         
-        for batch_x, batch_y in self.train_loader:
-            batch_x = batch_x.to(self.device)
-            batch_y = batch_y.to(self.device)
+        try:
+            for batch_idx, (batch_x, batch_y) in enumerate(self.train_loader):
+                try:
+                    batch_x = batch_x.to(self.device)
+                    batch_y = batch_y.to(self.device)
+                    
+                    self.optimizer.zero_grad()
+                    
+                    predictions = self.model(batch_x)
+                    
+                    if predictions.dim() == 1:
+                        predictions = predictions.unsqueeze(1)
+                    if batch_y.dim() == 1:
+                        batch_y = batch_y.unsqueeze(1)
+                    
+                    loss = self.criterion(predictions, batch_y)
+                    
+                    loss.backward()
+                    
+                    if self.config.training.gradient_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config.training.gradient_clip,
+                        )
+                    
+                    self.optimizer.step()
+                    
+                    total_loss += loss.item()
+                    num_batches += 1
+                        
+                except Exception as e:
+                    print(f"\nГРЕШКА в batch {batch_idx + 1}: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    sys.stdout.flush()
+                    raise
             
-            self.optimizer.zero_grad()
-            
-            predictions = self.model(batch_x)
-            
-            if predictions.dim() == 1:
-                predictions = predictions.unsqueeze(1)
-            if batch_y.dim() == 1:
-                batch_y = batch_y.unsqueeze(1)
-            
-            loss = self.criterion(predictions, batch_y)
-            
-            loss.backward()
-            
-            if self.config.training.gradient_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config.training.gradient_clip,
-                )
-            
-            self.optimizer.step()
-            
-            total_loss += loss.item()
-            num_batches += 1
+        except Exception as e:
+            print(f"\nКРИТИЧНА ГРЕШКА в train_epoch: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
+            raise
         
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
         return avg_loss
@@ -129,29 +147,58 @@ class Trainer:
         return avg_loss
     
     def train(self) -> dict:
+        import sys
         best_val_loss = float('inf')
         
-        for epoch in range(self.config.training.num_epochs):
-            train_loss = self.train_epoch()
-            val_loss = self.validate()
+        print(f"Започване на обучение за {self.config.training.num_epochs} epochs...")
+        sys.stdout.flush()
+        
+        try:
+            for epoch in range(self.config.training.num_epochs):
+                try:
+                    print(f"\nEpoch {epoch+1}/{self.config.training.num_epochs}...", end=" ", flush=True)
+                    train_loss = self.train_epoch()
+                    print(f"Train loss: {train_loss:.6f}", end=" ", flush=True)
+                    
+                    val_loss = self.validate()
+                    print(f"Val loss: {val_loss:.6f}", flush=True)
+                    
+                    self.train_losses.append(train_loss)
+                    self.val_losses.append(val_loss)
+                    
+                    if self.scheduler is not None:
+                        self.scheduler.step()
+                    
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                    
+                    self.checkpoint(self.model, val_loss, epoch)
+                    
+                    if self.early_stopping(val_loss):
+                        print(f"\nEarly stopping triggered after {epoch+1} epochs (patience: {self.config.training.early_stopping.patience})")
+                        sys.stdout.flush()
+                        break
+                    
+                except Exception as e:
+                    print(f"\nГРЕШКА в epoch {epoch+1}: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    sys.stdout.flush()
+                    raise
             
-            self.train_losses.append(train_loss)
-            self.val_losses.append(val_loss)
+            print(f"\nОбучението завърши успешно!")
+            print(f"Best validation loss: {best_val_loss:.6f}")
+            sys.stdout.flush()
             
-            if self.scheduler is not None:
-                self.scheduler.step()
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-            
-            self.checkpoint(self.model, val_loss, epoch)
-            
-            if self.early_stopping(val_loss):
-                break
-            
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch+1}/{self.config.training.num_epochs} - "
-                      f"Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+        except KeyboardInterrupt:
+            print("\nОбучението е прекъснато от потребителя.")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"\nКРИТИЧНА ГРЕШКА: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
+            raise
         
         return {
             "train_losses": self.train_losses,
