@@ -55,6 +55,15 @@ evaluation:
   save_predictions: true
   visualize: true
 
+# Backtest / симулация с пари
+simulation:
+  initial_capital: 100000.0       # Начален капитал (лв/долар)
+  position_size_pct: 1.0          # Колко от капитала на една сделка (1.0 = 100%, само една позиция)
+  entry_threshold_pct: 0.5        # Влизаме long ако pred_price > current_price * (1 + entry_threshold_pct/100)
+  exit_threshold_pct: -0.5        # Излизаме ако pred_price < current_price * (1 + exit_threshold_pct/100)
+  commission_pct: 0.1             # Комисионна в % на сделка (купуване + продажба)
+  risk_free_rate_annual: 0.03     # За Sharpe ratio (годова безрискова лихва)
+
 paths:
   data_dir: "data"
   models_dir: "models/checkpoints"
