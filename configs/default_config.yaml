@@ -5,8 +5,8 @@ data:
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15
-  context_length: 60  # Брой дни история (намалено от 90 за по-бързо обучение)
-  prediction_horizon: 1  # Брой дни за прогноза
+  context_length: 60
+  prediction_horizon: 1
   tickers:
     - "AAPL"
     - "MSFT"
@@ -20,24 +20,24 @@ data:
     technical_indicators: true
     lag_features: true
     temporal_features: true
-    simplified: true  # Използва опростена версия с ~15-20 features вместо 59
-    normalize: true  # Нормализира features и target заедно
-    normalize_method: "standard"  # standard или minmax
-    windows: [5, 10, 20, 50]  # Windows за moving averages (използва се само ако simplified=false)
+    simplified: true
+    normalize: true
+    normalize_method: "standard"
+    windows: [5, 10, 20, 50]
 
 model:
   type: "transformer"  # transformer, lstm, linear
-  d_model: 128  # Намалено от 256 за по-бързо обучение
-  n_heads: 4  # Намалено от 8 за по-бързо обучение
-  n_layers: 4  # Намалено от 6 за по-бързо обучение
-  d_ff: 512  # Намалено от 1024 за по-бързо обучение
+  d_model: 128
+  n_heads: 4
+  n_layers: 4
+  d_ff: 512
   dropout: 0.1
   activation: "gelu"
 
 training:
-  batch_size: 64  # Увеличено от 32 за по-бързо обучение
+  batch_size: 64
   learning_rate: 0.0001
-  num_epochs: 50  # Намалено от 100 за по-бързо обучение
+  num_epochs: 50
   optimizer: "adam"
   optimizer_params:
     betas: [0.9, 0.999]
@@ -45,24 +45,24 @@ training:
   scheduler: "cosine"
   gradient_clip: 1.0
   early_stopping:
-    patience: 5  # Намалено от 10 за по-бързо спиране ако няма подобрение
+    patience: 5
     min_delta: 0.0001
   
-  device: "cuda"  # cuda или cpu
+  device: "cuda"
 
 evaluation:
   metrics: ["mae", "rmse", "mape", "r2", "directional_accuracy"]
   save_predictions: true
   visualize: true
 
-# Backtest / симулация с пари
+# Backtest / trading simulation
 simulation:
-  initial_capital: 100000.0       # Начален капитал (лв/долар)
-  position_size_pct: 1.0          # Колко от капитала на една сделка (1.0 = 100%, само една позиция)
-  entry_threshold_pct: 0.5        # Влизаме long ако pred_price > current_price * (1 + entry_threshold_pct/100)
-  exit_threshold_pct: -0.5        # Излизаме ако pred_price < current_price * (1 + exit_threshold_pct/100)
-  commission_pct: 0.1             # Комисионна в % на сделка (купуване + продажба)
-  risk_free_rate_annual: 0.03     # За Sharpe ratio (годова безрискова лихва)
+  initial_capital: 100000.0
+  position_size_pct: 1.0
+  entry_threshold_pct: 0.5
+  exit_threshold_pct: -0.5
+  commission_pct: 0.1
+  risk_free_rate_annual: 0.03
 
 paths:
   data_dir: "data"

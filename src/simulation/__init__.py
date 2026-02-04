@@ -1,1 +1,1 @@
-# Backtest / симулация с пари
+# Backtest / trading simulation

@@ -1,6 +1,6 @@
 """
-Правила за търговски сигнали от предсказания на модела.
-Връщат 'buy', 'sell' или 'hold' според текуща цена, предсказана цена и прагове.
+Trading signal rules from model predictions.
+Return 'buy', 'sell' or 'hold' based on current price, predicted price and thresholds.
 """
 
 from typing import Literal
@@ -16,20 +16,20 @@ def signal_from_prediction(
     exit_threshold_pct: float = -0.5,
 ) -> Signal:
     """
-    Решава дали да купим, продадем или да държим според предсказанието.
+    Decide whether to buy, sell or hold based on the prediction.
 
-    - Ако сме в кеш: купуваме (buy), когато pred >= current * (1 + entry_threshold_pct/100).
-    - Ако сме в позиция: продаваме (sell), когато pred <= current * (1 + exit_threshold_pct/100).
-    - Иначе: hold.
+    - In cash: buy when pred >= current * (1 + entry_threshold_pct/100).
+    - In position: sell when pred <= current * (1 + exit_threshold_pct/100).
+    - Otherwise: hold.
 
-    Параметри:
-        current_price: Текуща (реална) цена на актива.
-        predicted_price: Предсказана от модела цена за следващия период.
-        in_position: Дали в момента държим акции (True) или сме в кеш (False).
-        entry_threshold_pct: Праг в % за влизане (напр. 0.5 = влизаме ако предсказанието е с 0.5% над текущата).
-        exit_threshold_pct: Праг в % за излизане (напр. -0.5 = излизаме ако предсказанието е с 0.5% под текущата).
+    Args:
+        current_price: Current (actual) asset price.
+        predicted_price: Model-predicted price for the next period.
+        in_position: Whether we currently hold shares (True) or are in cash (False).
+        entry_threshold_pct: Entry threshold in % (e.g. 0.5 = enter if prediction is 0.5% above current).
+        exit_threshold_pct: Exit threshold in % (e.g. -0.5 = exit if prediction is 0.5% below current).
 
-    Връща:
+    Returns:
         "buy" | "sell" | "hold"
     """
     if current_price <= 0:
@@ -43,7 +43,6 @@ def signal_from_prediction(
             return "sell"
         return "hold"
 
-    # В кеш – търсим влизане
     if predicted_price >= entry_bound:
         return "buy"
     return "hold"
