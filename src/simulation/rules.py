@@ -50,9 +50,10 @@ def signal_from_prediction(
         # For now, keep original logic: sell if prediction drops by threshold amount
         if pct_change <= exit_threshold_pct:
             return "sell"
-        # Alternative: also sell if pct_change is positive but very small (< 1%)
+        # Alternative: also sell if pct_change is positive but momentum weakens (< 3%)
         # This handles cases where prediction is always above price but momentum weakens
-        if pct_change > 0 and pct_change < 1.0:
+        # Balanced threshold: 3% gives moderate trading activity (was 5% = too many trades)
+        if pct_change > 0 and pct_change < 3.0:
             return "sell"
         return "hold"
     

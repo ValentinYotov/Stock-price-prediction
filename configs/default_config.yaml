@@ -58,9 +58,9 @@ evaluation:
 # Backtest / trading simulation
 simulation:
   initial_capital: 100000.0
-  position_size_pct: 1.0
+  position_size_pct: 0.3  # Use 30% of capital per trade (not all-in) - more flexible
   entry_threshold_pct: 0.5
-  exit_threshold_pct: -5.0  # Sell if prediction drops by 5% or more (was -0.5%, too conservative)
+  exit_threshold_pct: -5.0  # Sell if prediction drops by 5% or more
   commission_pct: 0.1
   risk_free_rate_annual: 0.03
 
