@@ -183,6 +183,7 @@ class EvaluationConfig:
 class PathsConfig:
     data_dir: Path = Path("data")
     models_dir: Path = Path("models") / "checkpoints"
+    checkpoint_file: str = "best_model.pt"
     results_dir: Path = Path("results")
 
     @classmethod
@@ -190,6 +191,7 @@ class PathsConfig:
         return cls(
             data_dir=Path(data.get("data_dir", "data")),
             models_dir=Path(data.get("models_dir", "models/checkpoints")),
+            checkpoint_file=str(data.get("checkpoint_file", "best_model.pt")),
             results_dir=Path(data.get("results_dir", "results")),
         )
 

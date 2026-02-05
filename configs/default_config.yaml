@@ -67,4 +67,5 @@ simulation:
 paths:
   data_dir: "data"
   models_dir: "models/checkpoints"
+  checkpoint_file: "best_model.pt"   # use the one from latest training (correct calibration)
   results_dir: "results"

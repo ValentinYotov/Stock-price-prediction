@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 from src.training.callbacks import EarlyStopping, ModelCheckpoint
 from src.training.losses import get_loss_function
-from src.utils.config import Config
+from src.utils.config import Config, PROJECT_ROOT
 
 
 class Trainer:
@@ -61,7 +61,10 @@ class Trainer:
             min_delta=config.training.early_stopping.min_delta,
         )
         
-        checkpoint_path = Path(config.paths.models_dir) / "best_model.pt"
+        # Use absolute path from project root (same as in notebooks)
+        checkpoint_name = getattr(config.paths, "checkpoint_file", "best_model.pt")
+        checkpoint_path = PROJECT_ROOT / config.paths.models_dir / checkpoint_name
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint = ModelCheckpoint(checkpoint_path, monitor="val_loss", mode="min")
         
         self.train_losses = []
