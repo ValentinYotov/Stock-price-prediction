@@ -60,7 +60,7 @@ simulation:
   initial_capital: 100000.0
   position_size_pct: 1.0
   entry_threshold_pct: 0.5
-  exit_threshold_pct: -0.5
+  exit_threshold_pct: -5.0  # Sell if prediction drops by 5% or more (was -0.5%, too conservative)
   commission_pct: 0.1
   risk_free_rate_annual: 0.03
 

@@ -98,18 +98,13 @@ class BacktestEngine:
                 exit_threshold_pct=self.exit_threshold_pct,
             )
 
-            # Debug first few trades
-            if i < 5:
-                pct_chg = 100 * (pred - price) / abs(price) if abs(price) > 1e-9 else 0
-                print(f"  Engine Day {i}: price={price:.4f}, pred={pred:.4f}, pct={pct_chg:.2f}%, "
-                      f"in_pos={in_position}, signal={signal}, abs(price)={abs(price):.6f}")
-
             if signal == "buy" and not in_position and abs(price) > 1e-9:
                 equity = cash
                 amount = equity * self.position_size_pct
                 commission = amount * (self.commission_pct / 100.0)
                 cost = amount - commission
-                qty = cost / price
+                # Use abs(price) for quantity calculation (works for both positive and negative prices)
+                qty = cost / abs(price)
                 if qty > 0:
                     cash -= amount
                     shares = qty
@@ -127,7 +122,8 @@ class BacktestEngine:
                     )
 
             elif signal == "sell" and in_position and abs(price) > 1e-9:
-                gross = shares * price
+                # Use abs(price) for gross calculation (works for both positive and negative prices)
+                gross = shares * abs(price)
                 commission = gross * (self.commission_pct / 100.0)
                 cash += gross - commission
                 qty = shares
@@ -145,7 +141,8 @@ class BacktestEngine:
                     )
                 )
 
-            equity_curve[i] = cash + shares * price
+            # Use abs(price) for equity calculation (works for both positive and negative prices)
+            equity_curve[i] = cash + shares * abs(price)
 
         return BacktestResult(
             equity_curve=equity_curve,

@@ -43,8 +43,16 @@ def signal_from_prediction(
     pct_change = 100 * (predicted_price - current_price) / abs(current_price)
     
     if in_position:
-        # Exit if predicted change is below exit threshold
+        # Exit if predicted change drops significantly
+        # exit_threshold_pct is negative (e.g. -5.0), meaning sell if pct_change <= -5.0
+        # But if predictions are always positive, we need alternative logic:
+        # Sell if pct_change drops below a minimum threshold (e.g. < 5% when it was higher)
+        # For now, keep original logic: sell if prediction drops by threshold amount
         if pct_change <= exit_threshold_pct:
+            return "sell"
+        # Alternative: also sell if pct_change is positive but very small (< 1%)
+        # This handles cases where prediction is always above price but momentum weakens
+        if pct_change > 0 and pct_change < 1.0:
             return "sell"
         return "hold"
     
