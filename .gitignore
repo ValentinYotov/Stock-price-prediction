@@ -68,3 +68,8 @@ Thumbs.db
 logs/
 wandb/
 tensorboard_logs/
+
+# Environment variables (API keys)
+.env
+.env.local
+.env.*.local
