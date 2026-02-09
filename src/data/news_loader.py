@@ -345,10 +345,22 @@ def fetch_stockdata_news(
         response.raise_for_status()
         data = response.json()
         
-        if 'data' not in data:
-            raise ValueError(f"Unexpected response format: {list(data.keys())}")
+        # Handle different response formats
+        if 'data' in data:
+            articles = data['data']
+        elif isinstance(data, list):
+            articles = data
+        else:
+            # Check for error messages
+            if 'message' in data or 'error' in data:
+                error_msg = data.get('message') or data.get('error', 'Unknown error')
+                raise ValueError(f"API Error: {error_msg}")
+            raise ValueError(f"Unexpected response format: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
         
-        articles = data['data']
+        # Free tier limitation: only 2 articles per request
+        # Note: This is a limitation of the free tier
+        if len(articles) == 2 and limit > 2:
+            print(f"⚠️  Free tier limitation: Only 2 articles per request. Requested {limit}.")
         
         # Convert to standardized format
         standardized_news = []
