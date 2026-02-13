@@ -24,6 +24,10 @@ data:
     normalize: true
     normalize_method: "standard"
     windows: [5, 10, 20, 50]
+  
+  # News features (optional)
+  use_news: false  # Set to true to enable news embeddings
+  news_cache_dir: "data/processed/news_cache"
 
 model:
   type: "transformer"  # transformer, lstm, linear
