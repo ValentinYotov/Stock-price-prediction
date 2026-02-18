@@ -72,6 +72,7 @@ class StockTransformerWithNews(nn.Module):
         news_proj_dim = news_projection_dim if news_projection_dim is not None else d_model
         self.news_projection = nn.Linear(news_embedding_dim, news_proj_dim)
         self.news_dropout = nn.Dropout(p=dropout)
+        self.news_proj_dim = news_proj_dim  # Store for use in forward
         
         # Final output projection
         if news_fusion_method == "concat":
@@ -132,7 +133,16 @@ class StockTransformerWithNews(nn.Module):
                 raise ValueError(f"Unknown fusion method: {self.news_fusion_method}")
         else:
             # Fallback to base model (no news)
-            combined = x
+            # If output_projection expects larger input (concat fusion), we need to pad
+            # Otherwise use x directly
+            if self.news_fusion_method == "concat":
+                # For concat fusion, output_projection expects d_model + news_proj_dim
+                # Pad with zeros to match expected size
+                zero_padding = torch.zeros(x.shape[0], self.news_proj_dim, device=x.device, dtype=x.dtype)
+                combined = torch.cat([x, zero_padding], dim=-1)  # [batch_size, d_model + news_proj_dim]
+            else:
+                # For add fusion, output_projection expects d_model
+                combined = x
         
         # Final prediction
         output = self.output_projection(combined)
