@@ -170,8 +170,6 @@ class StockTransformerWithNews(nn.Module):
         if self.pos_encoding is not None and base_model.pos_encoding is not None:
             self.pos_encoding.load_state_dict(base_model.pos_encoding.state_dict())
         self.encoder.load_state_dict(base_model.encoder.state_dict())
-        
-        print("✅ Loaded base model weights into enhanced model")
 
 
 __all__ = [

@@ -64,7 +64,6 @@ def extract_dataset_with_news(
     # Extract news embeddings
     news_embeddings_df = None
     if getattr(config.data, 'use_news', False):
-        print("\n📰 Extracting news embeddings...")
         extractor = NewsFeatureExtractor()
         news_embeddings_df = extractor.get_news_for_dataframe(
             df,
@@ -72,7 +71,6 @@ def extract_dataset_with_news(
             symbol_column=symbol_column,
             use_cache=use_news_cache,
         )
-        print(f"✅ News embeddings extracted: {news_embeddings_df.shape}")
     
     return df, feature_columns, news_embeddings_df
 
@@ -83,12 +81,7 @@ def get_datasets_with_news(
     use_news_cache: bool = True,
     force_refresh_news: bool = False,
 ) -> tuple:
-    """
-    Get datasets with news embeddings.
-    
-    Returns:
-        Tuple of (train_dataset, val_dataset, test_dataset, feature_columns)
-    """
+ 
     if config is None:
         from src.utils.config import load_config
         config = load_config()

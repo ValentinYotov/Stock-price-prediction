@@ -89,17 +89,12 @@ class TrainerWithNews(Trainer):
                         gc.collect()
                         
                 except Exception as e:
-                    print(f"\nГРЕШКА в batch {batch_idx + 1}: {e}", flush=True)
                     import traceback
                     traceback.print_exc()
-                    sys.stdout.flush()
                     raise
-            
         except Exception as e:
-            print(f"\nКРИТИЧНА ГРЕШКА в train_epoch: {e}", flush=True)
             import traceback
             traceback.print_exc()
-            sys.stdout.flush()
             raise
         
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0

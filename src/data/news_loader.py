@@ -359,9 +359,6 @@ def fetch_stockdata_news(
         
         # Free tier limitation: only 2 articles per request
         # Note: This is a limitation of the free tier
-        if len(articles) == 2 and limit > 2:
-            print(f"⚠️  Free tier limitation: Only 2 articles per request. Requested {limit}.")
-        
         # Convert to standardized format
         standardized_news = []
         for article in articles:

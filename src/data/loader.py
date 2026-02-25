@@ -19,27 +19,16 @@ def load_raw_dataset(
     local_file = Path("data/raw/sp500_stocks_data.parquet")
     
     if local_file.exists():
-        print(f"Зареждане на локален dataset от: {local_file}")
         df = pd.read_parquet(local_file)
-        print(f"Заредено! Размер: {df.shape}")
     else:
-        print(f"Зареждане на dataset от Hugging Face: {dataset_name}")
-        print("Това може да отнеме няколко минути при първо зареждане...")
-        
         try:
-            # Опитваме се да заредим само price данните (без news)
-            # Използваме data_files за да укажем конкретния файл
-            print("Опитвам се да заредя само price данните...")
             try:
                 dataset = load_dataset(
                     dataset_name,
                     data_files="sp500_daily_ratios_20yrs.zip",
                     download_mode="reuse_cache_if_exists"
                 )
-                print("Успешно зареден price dataset!")
             except Exception as e1:
-                print(f"Грешка при зареждане с data_files: {e1}")
-                print("Опитвам се да заредя целия dataset и да филтрирам...")
                 # Fallback: опитваме се да заредим целия dataset
                 try:
                     dataset = load_dataset(dataset_name, download_mode="reuse_cache_if_exists")
@@ -51,38 +40,26 @@ def load_raw_dataset(
                 except Exception as e3:
                     raise e1  # Повдигаме оригиналната грешка
         except Exception as e:
-            print(f"Грешка при зареждане: {e}")
-            print("Опитвам се алтернативен метод...")
             try:
-                # Последен опит - директно от zip файла
                 from huggingface_hub import hf_hub_download
                 import zipfile
                 import io
-                
-                print("Сваляне на zip файла директно...")
                 zip_path = hf_hub_download(
                     repo_id=dataset_name,
                     filename="sp500_daily_ratios_20yrs.zip",
                     repo_type="dataset"
                 )
                 
-                print(f"Zip файл свален. Четене на CSV...")
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     csv_files = [f for f in zip_ref.namelist() if f.endswith('.csv')]
                     if csv_files:
                         first_csv = csv_files[0]
                         with zip_ref.open(first_csv) as f:
                             df = pd.read_csv(f)
-                            print(f"CSV зареден успешно! Размер: {df.shape}")
-                            # Запазваме локално за следващи пъти
                             local_file.parent.mkdir(parents=True, exist_ok=True)
                             df.to_parquet(local_file, index=False)
-                            print(f"Запазено локално в: {local_file}")
                             return df
             except Exception as e2:
-                print(f"Грешка: {e2}")
-                print("\nПроблем: Не може да се свърже с Hugging Face Hub.")
-                print(f"Моля, свали dataset-а ръчно в notebook-а и запази го в: {local_file}")
                 raise
         
         if split is None:
@@ -90,9 +67,7 @@ def load_raw_dataset(
         else:
             split_name = split
         
-        print(f"Dataset зареден. Конвертиране в pandas...")
         df = dataset[split_name].to_pandas()
-        print(f"Конвертирано! Размер: {df.shape}")
     
     column_mapping = {
         "Ticker": "symbol",
@@ -157,7 +132,6 @@ def load_and_filter_dataset(
     if "Date" in df.columns and "date" not in df.columns:
         df = df.rename(columns={"Date": "date"})
     
-    print(f"Филтриране на данни... Първоначален размер: {df.shape}")
     df = filter_by_tickers_and_dates(
         df,
         tickers=tickers,
@@ -166,7 +140,6 @@ def load_and_filter_dataset(
         symbol_column="symbol",
         date_column="date",
     )
-    print(f"Филтрирано! Финален размер: {df.shape}")
     return df
 
 

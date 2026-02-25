@@ -45,9 +45,6 @@ class FinBERTEncoder:
         else:
             self.device = device
         
-        print(f"Loading FinBERT model: {model_name}")
-        print(f"Device: {self.device}")
-        
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
@@ -62,8 +59,6 @@ class FinBERTEncoder:
         
         self.model.to(self.device)
         self.model.eval()
-        
-        print(f"✅ FinBERT loaded successfully")
     
     def encode_text(
         self,
@@ -71,18 +66,7 @@ class FinBERTEncoder:
         return_sentiment: bool = False,
         max_length: int = 512,
     ) -> Union[np.ndarray, tuple[np.ndarray, Optional[dict]]]:
-        """
-        Encode text(s) into embeddings.
-        
-        Args:
-            text: Single text string or list of texts
-            return_sentiment: Whether to also return sentiment scores
-            max_length: Maximum sequence length
-        
-        Returns:
-            If return_sentiment=False: numpy array of embeddings (shape: [batch_size, hidden_size])
-            If return_sentiment=True: tuple of (embeddings, sentiment_dict)
-        """
+  
         # Handle single text
         if isinstance(text, str):
             texts = [text]
@@ -174,17 +158,7 @@ class FinBERTEncoder:
         batch_size: int = 32,
         return_sentiment: bool = False,
     ) -> Union[np.ndarray, tuple[np.ndarray, List[dict]]]:
-        """
-        Encode a batch of news texts efficiently.
-        
-        Args:
-            news_texts: List of news text strings
-            batch_size: Batch size for processing
-            return_sentiment: Whether to return sentiment scores
-        
-        Returns:
-            Embeddings array and optionally sentiment scores
-        """
+      
         all_embeddings = []
         all_sentiments = []
         

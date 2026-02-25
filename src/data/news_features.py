@@ -56,9 +56,7 @@ class NewsFeatureExtractor:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize encoder
         if encoder is None:
-            print("Loading FinBERT encoder...")
             self.encoder = FinBERTEncoder()
         else:
             self.encoder = encoder
@@ -95,12 +93,9 @@ class NewsFeatureExtractor:
         
         # Check cache
         if use_cache and not force_refresh and cache_path.exists():
-            print(f"📦 Loading cached news embeddings for {ticker} from {cache_path}")
             with open(cache_path, 'rb') as f:
                 return pickle.load(f)
         
-        # Fetch news
-        print(f"📰 Fetching news for {ticker} from {start_date.date()} to {end_date.date()}...")
         news_list = fetch_stockdata_news(
             ticker=ticker,
             api_key=self.api_key,
@@ -110,7 +105,6 @@ class NewsFeatureExtractor:
         )
         
         if not news_list:
-            print(f"⚠️  No news found for {ticker}")
             return self._create_empty_news_df(ticker, start_date, end_date)
         
         # Convert to DataFrame
@@ -130,8 +124,6 @@ class NewsFeatureExtractor:
             lambda x: ' '.join(x.astype(str))
         ).reset_index()
         
-        # Encode news with FinBERT
-        print(f"🔢 Encoding {len(daily_news)} days of news with FinBERT...")
         texts = daily_news['text'].tolist()
         embeddings = self.encoder.encode_text(texts)
         
@@ -146,7 +138,6 @@ class NewsFeatureExtractor:
         
         # Cache result
         if use_cache:
-            print(f"💾 Caching news embeddings to {cache_path}")
             with open(cache_path, 'wb') as f:
                 pickle.dump(result_df, f)
         
@@ -168,19 +159,7 @@ class NewsFeatureExtractor:
         symbol_column: str = "ticker",
         use_cache: bool = True,
     ) -> pd.DataFrame:
-        """
-        Get news embeddings for a DataFrame (returns only news embeddings, not merged).
-        
-        Args:
-            df: DataFrame with date and ticker columns
-            date_column: Name of date column
-            symbol_column: Name of ticker/symbol column
-            use_cache: Whether to use cache
-        
-        Returns:
-            DataFrame with columns: date, ticker, news_embedding_0, ..., news_embedding_767
-            (Not merged with input df - this is done separately in prepare_dataset_with_news)
-        """
+       
         # Get unique tickers and date range
         tickers = df[symbol_column].unique()
         dates = pd.to_datetime(df[date_column])

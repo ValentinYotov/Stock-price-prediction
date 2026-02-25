@@ -42,11 +42,7 @@ def scrape_yahoo_finance_news_historical(
     # Note: Yahoo Finance doesn't have a direct historical news API
     # This would require scraping their news pages
     
-    print(f"⚠️  Yahoo Finance historical scraping is complex.")
-    print(f"   Yahoo Finance doesn't provide easy historical news access.")
-    print(f"   Consider using alternative sources for historical data.")
-    
-    # For now, return empty - would need to implement actual scraping
+    # Yahoo does not provide easy historical news API; return empty
     return []
 
 
@@ -71,10 +67,6 @@ def scrape_seeking_alpha_news(
     Returns:
         List of news dictionaries
     """
-    print(f"⚠️  Seeking Alpha scraping requires careful implementation.")
-    print(f"   Check their terms of service and robots.txt first.")
-    print(f"   Consider using RSS feeds if available.")
-    
     return []
 
 
@@ -123,8 +115,7 @@ def get_rss_feed_news(
         
         return news_items
         
-    except Exception as e:
-        print(f"❌ Error fetching RSS feed: {e}")
+    except Exception:
         return []
 
 
@@ -152,36 +143,26 @@ def fetch_historical_news_combined(
     if "yfinance" in sources:
         try:
             from src.data.news_loader import fetch_yahoo_finance_news
-            print(f"Fetching recent news from Yahoo Finance (yfinance)...")
             yf_news = fetch_yahoo_finance_news(ticker, limit=None)
-            
             if yf_news:
-                # Filter by date
                 filtered_news = [
                     n for n in yf_news
                     if start_date <= n.get('published_time', datetime.min) <= end_date
                 ]
-                print(f"  Found {len(filtered_news)} news items in date range")
                 all_news.extend(filtered_news)
-        except Exception as e:
-            print(f"  ⚠️  Error with yfinance: {e}")
-    
-    # Try RSS feeds
+        except Exception:
+            pass
     if "yahoo_rss" in sources:
         try:
-            print(f"Fetching news from Yahoo Finance RSS feed...")
             rss_news = get_rss_feed_news(ticker, source="yahoo")
-            
             if rss_news:
-                # Filter by date
                 filtered_news = [
                     n for n in rss_news
                     if n.get('published_time') and start_date <= n['published_time'] <= end_date
                 ]
-                print(f"  Found {len(filtered_news)} news items from RSS")
                 all_news.extend(filtered_news)
-        except Exception as e:
-            print(f"  ⚠️  Error with RSS: {e}")
+        except Exception:
+            pass
     
     # Remove duplicates (by title or link)
     seen = set()
@@ -191,8 +172,6 @@ def fetch_historical_news_combined(
         if identifier and identifier not in seen:
             seen.add(identifier)
             unique_news.append(item)
-    
-    print(f"\n✅ Total unique news items: {len(unique_news)}")
     
     if unique_news:
         df = pd.DataFrame(unique_news)

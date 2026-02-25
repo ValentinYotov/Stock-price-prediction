@@ -74,27 +74,11 @@ def buy_and_hold_return_pct(
     initial_capital: float,
     prices: np.ndarray,
 ) -> float:
-    """Return in % from buying at first price and holding until last.
-    
-    For normalized prices (StandardScaler): uses relative change correctly.
-    StandardScaler: normalized = (x - mean) / std
-    So: x = normalized * std + mean
-    
-    Return = (x1 - x0) / x0 = ((n1 - n0) * std) / (n0 * std + mean)
-    
-    But if we don't have std/mean, we can use relative change in normalized space
-    as approximation, or better: use the actual price ratio if we track it.
-    
-    For now, use relative change: if price goes from p0 to p1, return = (p1 - p0) / abs(p0) * 100
-    This works for normalized space if we treat it as relative movement.
-    """
+  
     p = np.asarray(prices).ravel()
     if len(p) < 2 or abs(p[0]) < 1e-9 or initial_capital <= 0:
         return 0.0
     
-    # For normalized prices, use relative change: (final - initial) / initial
-    # This gives the % change in normalized space, which approximates real % change
-    # for StandardScaler (linear transformation preserves ratios approximately)
     pct_change = (p[-1] - p[0]) / abs(p[0]) * 100.0
     
     # Buy & hold return = same as price return (we buy and hold)
@@ -108,19 +92,7 @@ def compute_metrics(
     trading_days_per_year: int = 252,
     prices: Optional[np.ndarray] = None,
 ) -> SimulationMetrics:
-    """
-    Compute all simulation metrics from a BacktestResult.
-
-    Args:
-        result: Output of BacktestEngine.run().
-        initial_capital: Starting capital.
-        risk_free_rate_annual: Annual risk-free rate for Sharpe.
-        trading_days_per_year: Used to annualize Sharpe.
-        prices: Optional price series (same length as equity_curve) for buy-and-hold return.
-
-    Returns:
-        SimulationMetrics with return, Sharpe, max drawdown, trade count, and optional BH comparison.
-    """
+    
     eq = result.equity_curve
     ret_pct = total_return_pct(eq, initial_capital)
     sharpe = sharpe_ratio_annual(eq, risk_free_rate_annual, trading_days_per_year)

@@ -114,17 +114,12 @@ class Trainer:
                         gc.collect()
                         
                 except Exception as e:
-                    print(f"\nГРЕШКА в batch {batch_idx + 1}: {e}", flush=True)
                     import traceback
                     traceback.print_exc()
-                    sys.stdout.flush()
                     raise
-            
         except Exception as e:
-            print(f"\nКРИТИЧНА ГРЕШКА в train_epoch: {e}", flush=True)
             import traceback
             traceback.print_exc()
-            sys.stdout.flush()
             raise
         
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
@@ -156,60 +151,30 @@ class Trainer:
         return avg_loss
     
     def train(self) -> dict:
-        import sys
-        import time
         best_val_loss = float('inf')
-        
-        print(f"Започване на обучение за {self.config.training.num_epochs} epochs...")
-        sys.stdout.flush()
-        
         try:
             for epoch in range(self.config.training.num_epochs):
                 try:
-                    epoch_start_time = time.time()
-                    print(f"\nEpoch {epoch+1}/{self.config.training.num_epochs}...", end=" ", flush=True)
                     train_loss = self.train_epoch()
-                    print(f"Train loss: {train_loss:.6f}", end=" ", flush=True)
-                    
                     val_loss = self.validate()
-                    epoch_time = time.time() - epoch_start_time
-                    print(f"Val loss: {val_loss:.6f} ({epoch_time:.1f}s)", flush=True)
-                    
                     self.train_losses.append(train_loss)
                     self.val_losses.append(val_loss)
-                    
                     if self.scheduler is not None:
                         self.scheduler.step()
-                    
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                    
                     self.checkpoint(self.model, val_loss, epoch)
-                    
                     if self.early_stopping(val_loss):
-                        print(f"\nEarly stopping triggered after {epoch+1} epochs (patience: {self.config.training.early_stopping.patience})")
-                        sys.stdout.flush()
                         break
-                    
                 except Exception as e:
-                    print(f"\nГРЕШКА в epoch {epoch+1}: {e}", flush=True)
                     import traceback
                     traceback.print_exc()
-                    sys.stdout.flush()
                     raise
-            
-            print(f"\nОбучението завърши успешно!")
-            print(f"Best validation loss: {best_val_loss:.6f}")
-            sys.stdout.flush()
-            
         except KeyboardInterrupt:
-            print("\nОбучението е прекъснато от потребителя.")
-            sys.stdout.flush()
+            pass
         except Exception as e:
-            print(f"\nКРИТИЧНА ГРЕШКА: {e}", flush=True)
             import traceback
             traceback.print_exc()
-            sys.stdout.flush()
             raise
         
         return {
