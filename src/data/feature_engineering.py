@@ -4,6 +4,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+import os
 
 
 def calculate_sma(df: pd.DataFrame, column: str, window: int) -> pd.Series:
