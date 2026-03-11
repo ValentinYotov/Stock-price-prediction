@@ -9,7 +9,7 @@ from datasets import load_dataset
 from src.utils.config import Config, load_config
 
 
-def load_raw_dataset(
+deff load_raw_dataset(
     config: Optional[Config] = None, split: Optional[str] = None
 ) -> pd.DataFrame:
     if config is None:
