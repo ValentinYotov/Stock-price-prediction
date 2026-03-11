@@ -25,3 +25,7 @@ ipykernel>=6.25.0
 # Optional but useful
 yfinance>=0.2.0  # За допълнителни данни ако е нужно
 tensorboard>=2.13.0  # За logging на training
+
+# CI / dev tools
+pytest>=8.0.0
+flake8>=7.0.0
