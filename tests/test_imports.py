@@ -29,3 +29,5 @@ def test_all_src_modules_importable():
         f"{name}: {err}" for name, err in failed
     )
 
+def test_force_fail():
+    assert False, "Intentional failure for CI demo"
