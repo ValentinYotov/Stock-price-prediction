@@ -8,6 +8,33 @@ import torch
 from torch.utils.data import Dataset
 
 
+def _split_chronological(
+    df: pd.DataFrame,
+    train_split: float,
+    val_split: float,
+    test_split: float,
+    date_column: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split a single chronologically sorted series by time (no shuffle)."""
+    total_len = len(df)
+    if total_len < 3:
+        raise ValueError(f"Need at least 3 rows to split, got {total_len}")
+
+    train_end = int(total_len * train_split)
+    val_end = train_end + int(total_len * val_split)
+
+    if train_end < 1 or val_end <= train_end or val_end >= total_len:
+        raise ValueError(
+            f"Split ratios leave an empty partition (n={total_len}, "
+            f"train_end={train_end}, val_end={val_end})"
+        )
+
+    train_df = df.iloc[:train_end].copy()
+    val_df = df.iloc[train_end:val_end].copy()
+    test_df = df.iloc[val_end:].copy()
+    return train_df, val_df, test_df
+
+
 def time_series_split(
     df: pd.DataFrame,
     train_split: float = 0.7,
@@ -15,23 +42,52 @@ def time_series_split(
     test_split: float = 0.15,
     date_column: str = "date",
     symbol_column: Optional[str] = "symbol",
+    per_symbol: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Time-based train/val/test split.
+
+    per_symbol=False: legacy global split on all rows (avoid with multiple tickers).
+    per_symbol=True: split each ticker by its own timeline, then concatenate.
+    """
     if abs(train_split + val_split + test_split - 1.0) > 1e-6:
         raise ValueError("Splits must sum to 1.0")
-    
+
     result = df.copy()
     result[date_column] = pd.to_datetime(result[date_column])
-    result = result.sort_values([symbol_column, date_column] if symbol_column else [date_column])
-    
-    total_len = len(result)
-    train_end = int(total_len * train_split)
-    val_end = train_end + int(total_len * val_split)
-    
-    train_df = result.iloc[:train_end].copy()
-    val_df = result.iloc[train_end:val_end].copy()
-    test_df = result.iloc[val_end:].copy()
-    
-    return train_df, val_df, test_df
+
+    use_per_symbol = (
+        per_symbol
+        and symbol_column is not None
+        and symbol_column in result.columns
+        and result[symbol_column].nunique() > 1
+    )
+
+    if not use_per_symbol:
+        sort_cols = [date_column]
+        if symbol_column and symbol_column in result.columns:
+            sort_cols = [symbol_column, date_column]
+        result = result.sort_values(sort_cols)
+        return _split_chronological(result, train_split, val_split, test_split, date_column)
+
+    train_parts: list[pd.DataFrame] = []
+    val_parts: list[pd.DataFrame] = []
+    test_parts: list[pd.DataFrame] = []
+
+    for _, group in result.groupby(symbol_column, sort=False):
+        group = group.sort_values(date_column)
+        train_df, val_df, test_df = _split_chronological(
+            group, train_split, val_split, test_split, date_column
+        )
+        train_parts.append(train_df)
+        val_parts.append(val_df)
+        test_parts.append(test_df)
+
+    return (
+        pd.concat(train_parts, ignore_index=True),
+        pd.concat(val_parts, ignore_index=True),
+        pd.concat(test_parts, ignore_index=True),
+    )
 
 
 def create_sequences(
@@ -89,9 +145,16 @@ def prepare_dataset(
     train_split: float = 0.7,
     val_split: float = 0.15,
     test_split: float = 0.15,
+    per_symbol: bool = False,
 ) -> tuple[StockDataset, StockDataset, StockDataset]:
     train_df, val_df, test_df = time_series_split(
-        df, train_split, val_split, test_split, date_column, symbol_column
+        df,
+        train_split,
+        val_split,
+        test_split,
+        date_column,
+        symbol_column,
+        per_symbol=per_symbol,
     )
     
     train_data = train_df[feature_columns].values

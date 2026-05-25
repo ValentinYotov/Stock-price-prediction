@@ -1,4 +1,4 @@
-# Default Configuration File
+# Default Configuration File — thesis base model (technical only)
 
 data:
   dataset_name: "pmoe7/SP_500_Stocks_Data-ratios_news_price_10_yrs"
@@ -7,15 +7,22 @@ data:
   test_split: 0.15
   context_length: 60
   prediction_horizon: 1
+
+  # Fixed thesis universe (same tickers for base model and later news experiments)
   tickers:
     - "AAPL"
-    - "MSFT"
-    - "GOOGL"
-    - "AMZN"
-    - "META"
-  start_date: "2010-01-01"
+    - "JPM"
+    - "DIS"
+  start_date: "2015-01-01"
   end_date: null
-  
+
+  # per_symbol: split train/val/test by time within each ticker (no cross-ticker leakage)
+  split_mode: "per_symbol"
+  target_column: "log_return"
+  price_column: "close"
+  # Set to e.g. "AAPL" to train/evaluate on a single hero ticker only; null = all tickers above
+  hero_ticker: null
+
   features:
     technical_indicators: true
     lag_features: true
@@ -23,14 +30,14 @@ data:
     simplified: true
     normalize: true
     normalize_method: "standard"
+    normalize_target: false
     windows: [5, 10, 20, 50]
-  
 
-  use_news: false  
+  use_news: false
   news_cache_dir: "data/processed/news_cache"
 
 model:
-  type: "transformer"  
+  type: "transformer"
   d_model: 128
   n_heads: 4
   n_layers: 4
@@ -51,7 +58,7 @@ training:
   early_stopping:
     patience: 5
     min_delta: 0.0001
-  
+
   device: "cuda"
 
 evaluation:
@@ -59,17 +66,16 @@ evaluation:
   save_predictions: true
   visualize: true
 
-# Backtest / trading simulation
 simulation:
   initial_capital: 100000.0
-  position_size_pct: 0.3  # Use 30% of capital per trade (not all-in) - more flexible
+  position_size_pct: 0.3
   entry_threshold_pct: 0.5
-  exit_threshold_pct: -5.0  # Sell if prediction drops by 5% or more
+  exit_threshold_pct: -5.0
   commission_pct: 0.1
   risk_free_rate_annual: 0.03
 
 paths:
   data_dir: "data"
   models_dir: "models/checkpoints"
-  checkpoint_file: "best_model.pt"   # use the one from latest training (correct calibration)
+  checkpoint_file: "best_model_base.pt"
   results_dir: "results"

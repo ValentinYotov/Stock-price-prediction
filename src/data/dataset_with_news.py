@@ -104,6 +104,7 @@ def prepare_dataset_with_news(
     train_split: float = 0.7,
     val_split: float = 0.15,
     test_split: float = 0.15,
+    per_symbol: bool = False,
 ) -> tuple[StockDatasetWithNews, StockDatasetWithNews, StockDatasetWithNews]:
     """
     Prepare datasets with news embeddings.
@@ -126,7 +127,13 @@ def prepare_dataset_with_news(
     """
     # Split data
     train_df, val_df, test_df = time_series_split(
-        df, train_split, val_split, test_split, date_column, symbol_column
+        df,
+        train_split,
+        val_split,
+        test_split,
+        date_column,
+        symbol_column,
+        per_symbol=per_symbol,
     )
     
     # Prepare technical features

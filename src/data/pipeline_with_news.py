@@ -15,7 +15,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from src.data.pipeline import extract_dataset
 from src.data.dataset_with_news import prepare_dataset_with_news
 from src.data.news_features import NewsFeatureExtractor
-from src.utils.config import Config
+from src.utils.config import Config, split_per_symbol
 
 
 def extract_dataset_with_news(
@@ -95,13 +95,19 @@ def get_datasets_with_news(
     )
     
     # Prepare datasets
+    target_column = config.data.target_column
+
     train_dataset, val_dataset, test_dataset = prepare_dataset_with_news(
         df,
         feature_columns=feature_columns,
-        target_column=price_column,
+        target_column=target_column,
         news_embeddings_df=news_embeddings_df,
         context_length=config.data.context_length,
         prediction_horizon=config.data.prediction_horizon,
+        train_split=config.data.train_split,
+        val_split=config.data.val_split,
+        test_split=config.data.test_split,
+        per_symbol=split_per_symbol(config),
     )
     
     return train_dataset, val_dataset, test_dataset, feature_columns

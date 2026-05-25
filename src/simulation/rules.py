@@ -61,3 +61,30 @@ def signal_from_prediction(
     if pct_change >= entry_threshold_pct:
         return "buy"
     return "hold"
+
+
+def signal_from_return(
+    predicted_return: float,
+    in_position: bool,
+    entry_threshold: float = 0.005,
+    exit_threshold: float = -0.005,
+) -> Signal:
+    """
+    Trading signals when the model predicts next-period log return (not price).
+
+    Args:
+        predicted_return: Predicted log return for the next period.
+        in_position: Whether we currently hold shares.
+        entry_threshold: Min predicted log return to enter (e.g. 0.005 ≈ 0.5%).
+        exit_threshold: Max predicted log return to exit (e.g. -0.005).
+    """
+    if in_position:
+        if predicted_return <= exit_threshold:
+            return "sell"
+        if 0 < predicted_return < entry_threshold:
+            return "sell"
+        return "hold"
+
+    if predicted_return >= entry_threshold:
+        return "buy"
+    return "hold"

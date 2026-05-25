@@ -156,6 +156,26 @@ def add_volume_features(df: pd.DataFrame, volume_column: str = "volume") -> pd.D
     return result
 
 
+def add_forward_log_return(
+    df: pd.DataFrame,
+    price_column: str = "close",
+    target_column: str = "log_return",
+    symbol_column: Optional[str] = "symbol",
+) -> pd.DataFrame:
+    """
+    Next-period log return: log(close[t+1] / close[t]), aligned for horizon=1 prediction.
+    """
+    result = df.copy()
+    if symbol_column and symbol_column in result.columns:
+        next_close = result.groupby(symbol_column)[price_column].shift(-1)
+    else:
+        next_close = result[price_column].shift(-1)
+
+    ratio = next_close / result[price_column].replace(0, np.nan)
+    result[target_column] = np.log(ratio)
+    return result
+
+
 def create_all_features(
     df: pd.DataFrame,
     price_column: str = "close",
@@ -244,6 +264,7 @@ def create_all_features(
 
 
 __all__ = [
+    "add_forward_log_return",
     "calculate_sma",
     "calculate_ema",
     "calculate_rsi",

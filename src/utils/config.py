@@ -19,6 +19,7 @@ class DataFeaturesConfig:
     temporal_features: bool = True
     simplified: bool = False
     normalize: bool = True
+    normalize_target: bool = False
     normalize_method: str = "standard"
     windows: List[int] = field(default_factory=lambda: [5, 10, 20, 50])
 
@@ -30,6 +31,7 @@ class DataFeaturesConfig:
             temporal_features=bool(data.get("temporal_features", True)),
             simplified=bool(data.get("simplified", False)),
             normalize=bool(data.get("normalize", True)),
+            normalize_target=bool(data.get("normalize_target", False)),
             normalize_method=str(data.get("normalize_method", "standard")),
             windows=list(data.get("windows", [5, 10, 20, 50])),
         )
@@ -46,6 +48,12 @@ class DataConfig:
     tickers: Optional[List[str]] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    split_mode: str = "per_symbol"
+    target_column: str = "log_return"
+    price_column: str = "close"
+    hero_ticker: Optional[str] = None
+    use_news: bool = False
+    news_cache_dir: str = "data/processed/news_cache"
     features: DataFeaturesConfig = field(default_factory=DataFeaturesConfig)
 
     @classmethod
@@ -53,6 +61,8 @@ class DataConfig:
         features_cfg = DataFeaturesConfig.from_dict(data.get("features", {}))
         raw_tickers = data.get("tickers")
         tickers = list(raw_tickers) if raw_tickers is not None else None
+        hero = data.get("hero_ticker")
+        hero_ticker = str(hero) if hero else None
 
         return cls(
             dataset_name=str(
@@ -66,8 +76,19 @@ class DataConfig:
             tickers=tickers,
             start_date=data.get("start_date"),
             end_date=data.get("end_date"),
+            split_mode=str(data.get("split_mode", "per_symbol")),
+            target_column=str(data.get("target_column", "log_return")),
+            price_column=str(data.get("price_column", "close")),
+            hero_ticker=hero_ticker,
+            use_news=bool(data.get("use_news", False)),
+            news_cache_dir=str(data.get("news_cache_dir", "data/processed/news_cache")),
             features=features_cfg,
         )
+
+
+def split_per_symbol(config: Config) -> bool:
+    """True when train/val/test should be split per ticker timeline."""
+    return config.data.split_mode.strip().lower() == "per_symbol"
 
 
 @dataclass
@@ -256,6 +277,7 @@ __all__ = [
     "Config",
     "DataConfig",
     "DataFeaturesConfig",
+    "split_per_symbol",
     "ModelConfig",
     "TrainingConfig",
     "EvaluationConfig",
