@@ -28,6 +28,39 @@ def test_time_series_split_per_symbol_preserves_ticker_boundaries():
             assert sub["date"].is_monotonic_increasing
 
 
+def test_prepare_sequences_per_symbol_does_not_mix_tickers():
+    from src.data.dataset import prepare_dataset
+
+    dates = pd.date_range("2020-01-01", periods=80, freq="D")
+    df = pd.DataFrame(
+        {
+            "date": list(dates) * 2,
+            "symbol": ["A"] * 80 + ["B"] * 80,
+            "close": np.linspace(100, 200, 160),
+            # constant feature per ticker -> any mix inside a sequence will show as non-constant
+            "feat_const": [0.0] * 80 + [1.0] * 80,
+            "log_return": [0.0] * 159 + [np.nan],
+        }
+    ).dropna()
+
+    train_ds, _, _ = prepare_dataset(
+        df,
+        feature_columns=["feat_const"],
+        target_column="log_return",
+        context_length=10,
+        prediction_horizon=1,
+        per_symbol=True,
+        symbol_column="symbol",
+        date_column="date",
+        train_split=0.7,
+        val_split=0.15,
+        test_split=0.15,
+    )
+
+    x0, _ = train_ds[0]
+    assert float(x0.min()) == float(x0.max())
+
+
 def test_time_series_split_global_legacy():
     df = pd.DataFrame({
         "date": pd.date_range("2020-01-01", periods=100, freq="D"),

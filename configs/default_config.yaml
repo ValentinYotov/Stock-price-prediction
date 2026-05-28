@@ -11,8 +11,25 @@ data:
   # Fixed thesis universe (same tickers for base model and later news experiments)
   tickers:
     - "AAPL"
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "META"
+    - "NVDA"
+    - "TSLA"
+    - "NFLX"
     - "JPM"
-    - "DIS"
+    - "BAC"
+    - "V"
+    - "MA"
+    - "JNJ"
+    - "PFE"
+    - "WMT"
+    - "COST"
+    - "KO"
+    - "PEP"
+    - "XOM"
+    - "CVX"
   start_date: "2015-01-01"
   end_date: null
 
@@ -71,6 +88,9 @@ simulation:
   position_size_pct: 0.3
   entry_threshold_pct: 0.5
   exit_threshold_pct: -5.0
+  # Log-return thresholds for backtest when target_column is log_return
+  entry_threshold_return: 0.005
+  exit_threshold_return: -0.005
   commission_pct: 0.1
   risk_free_rate_annual: 0.03
 

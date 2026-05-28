@@ -7,7 +7,7 @@ from typing import List, Optional, Union
 
 import numpy as np
 
-from .rules import signal_from_prediction, Signal
+from .rules import signal_from_prediction, signal_from_return, Signal
 
 
 @dataclass
@@ -260,6 +260,99 @@ class BacktestEngine:
                 equity_curve[i] = cash + shares * abs(price)  # shares is negative, so this subtracts
             else:
                 equity_curve[i] = cash
+
+        return BacktestResult(
+            equity_curve=equity_curve,
+            trades=trades,
+            final_cash=cash,
+            final_shares=shares,
+            dates=dates,
+        )
+
+    def run_from_log_returns(
+        self,
+        prices: np.ndarray,
+        predicted_returns: np.ndarray,
+        dates: Optional[np.ndarray] = None,
+        entry_threshold: float = 0.005,
+        exit_threshold: float = -0.005,
+    ) -> BacktestResult:
+        """
+        Long-only backtest using predicted next-period log returns and real close prices.
+
+        At day i: signal from predicted_returns[i]; trades execute at prices[i] (close).
+        """
+        prices = np.asarray(prices, dtype=float).ravel()
+        predicted_returns = np.asarray(predicted_returns, dtype=float).ravel()
+        n = len(prices)
+        if len(predicted_returns) != n:
+            raise ValueError("prices and predicted_returns must have the same length")
+        if n == 0:
+            raise ValueError("prices must not be empty")
+
+        if dates is None:
+            dates = np.arange(n)
+        dates = np.asarray(dates)
+
+        cash = float(self.initial_capital)
+        shares = 0.0
+        equity_curve = np.zeros(n)
+        trades: List[Trade] = []
+
+        for i in range(n):
+            price = float(prices[i])
+            pred_ret = float(predicted_returns[i])
+            is_long = shares > 1e-9
+            is_cash = abs(shares) < 1e-9
+
+            signal = signal_from_return(
+                pred_ret,
+                in_position=is_long,
+                entry_threshold=entry_threshold,
+                exit_threshold=exit_threshold,
+            )
+
+            if signal == "buy" and price > 1e-9 and is_cash:
+                amount = cash * self.position_size_pct
+                commission = amount * (self.commission_pct / 100.0)
+                cost = amount - commission
+                qty = cost / price
+                if qty > 0:
+                    cash -= amount
+                    shares = qty
+                    trades.append(
+                        Trade(
+                            date_idx=i,
+                            date=dates[i] if i < len(dates) else i,
+                            side="buy",
+                            price=price,
+                            quantity=qty,
+                            commission=commission,
+                            cash_after=cash,
+                            shares_after=shares,
+                        )
+                    )
+
+            elif signal == "sell" and price > 1e-9 and is_long:
+                gross = shares * price
+                commission = gross * (self.commission_pct / 100.0)
+                cash += gross - commission
+                qty = shares
+                shares = 0.0
+                trades.append(
+                    Trade(
+                        date_idx=i,
+                        date=dates[i] if i < len(dates) else i,
+                        side="sell",
+                        price=price,
+                        quantity=qty,
+                        commission=commission,
+                        cash_after=cash,
+                        shares_after=0.0,
+                    )
+                )
+
+            equity_curve[i] = cash + shares * price
 
         return BacktestResult(
             equity_curve=equity_curve,
