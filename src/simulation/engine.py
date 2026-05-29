@@ -7,7 +7,12 @@ from typing import List, Optional, Union
 
 import numpy as np
 
-from .rules import signal_from_prediction, signal_from_return, Signal
+from .rules import (
+    signal_from_prediction,
+    signal_from_return,
+    signal_from_return_band,
+    Signal,
+)
 
 
 @dataclass
@@ -276,11 +281,16 @@ class BacktestEngine:
         dates: Optional[np.ndarray] = None,
         entry_threshold: float = 0.005,
         exit_threshold: float = -0.005,
+        signal_mode: str = "default",
     ) -> BacktestResult:
         """
         Long-only backtest using predicted next-period log returns and real close prices.
 
         At day i: signal from predicted_returns[i]; trades execute at prices[i] (close).
+
+        signal_mode:
+            "default" - signal_from_return (sells aggressively when momentum weakens).
+            "band"    - signal_from_return_band (buys above entry, sells below exit, holds in between).
         """
         prices = np.asarray(prices, dtype=float).ravel()
         predicted_returns = np.asarray(predicted_returns, dtype=float).ravel()
@@ -305,12 +315,20 @@ class BacktestEngine:
             is_long = shares > 1e-9
             is_cash = abs(shares) < 1e-9
 
-            signal = signal_from_return(
-                pred_ret,
-                in_position=is_long,
-                entry_threshold=entry_threshold,
-                exit_threshold=exit_threshold,
-            )
+            if signal_mode == "band":
+                signal = signal_from_return_band(
+                    pred_ret,
+                    in_position=is_long,
+                    entry_threshold=entry_threshold,
+                    exit_threshold=exit_threshold,
+                )
+            else:
+                signal = signal_from_return(
+                    pred_ret,
+                    in_position=is_long,
+                    entry_threshold=entry_threshold,
+                    exit_threshold=exit_threshold,
+                )
 
             if signal == "buy" and price > 1e-9 and is_cash:
                 amount = cash * self.position_size_pct

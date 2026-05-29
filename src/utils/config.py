@@ -145,6 +145,7 @@ class TrainingConfig:
     batch_size: int = 32
     learning_rate: float = 1e-4
     num_epochs: int = 100
+    loss: str = "mse"
     optimizer: str = "adam"
     optimizer_params: OptimizerParamsConfig = field(
         default_factory=OptimizerParamsConfig
@@ -169,6 +170,7 @@ class TrainingConfig:
             batch_size=int(data.get("batch_size", 32)),
             learning_rate=float(data.get("learning_rate", 1e-4)),
             num_epochs=int(data.get("num_epochs", 100)),
+            loss=str(data.get("loss", "mse")),
             optimizer=str(data.get("optimizer", "adam")),
             optimizer_params=optimizer_params,
             scheduler=str(data.get("scheduler", "cosine")),

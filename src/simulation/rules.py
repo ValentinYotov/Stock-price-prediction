@@ -88,3 +88,23 @@ def signal_from_return(
     if predicted_return >= entry_threshold:
         return "buy"
     return "hold"
+
+
+def signal_from_return_band(
+    predicted_return: float,
+    in_position: bool,
+    entry_threshold: float,
+    exit_threshold: float,
+) -> Signal:
+    """
+    Band-style signals: enter when prediction is strong, exit when it's weak,
+    hold otherwise. Works on raw predictions or per-ticker quantile thresholds.
+    """
+    if in_position:
+        if predicted_return <= exit_threshold:
+            return "sell"
+        return "hold"
+
+    if predicted_return >= entry_threshold:
+        return "buy"
+    return "hold"

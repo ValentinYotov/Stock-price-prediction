@@ -55,26 +55,27 @@ data:
 
 model:
   type: "transformer"
-  d_model: 128
-  n_heads: 4
-  n_layers: 4
-  d_ff: 512
+  d_model: 256
+  n_heads: 8
+  n_layers: 6
+  d_ff: 1024
   dropout: 0.1
   activation: "gelu"
 
 training:
   batch_size: 64
-  learning_rate: 0.0001
-  num_epochs: 50
-  optimizer: "adam"
+  learning_rate: 0.0002
+  num_epochs: 200
+  loss: "huber"
+  optimizer: "adamw"
   optimizer_params:
     betas: [0.9, 0.999]
-    weight_decay: 0.01
+    weight_decay: 0.02
   scheduler: "cosine"
   gradient_clip: 1.0
   early_stopping:
-    patience: 5
-    min_delta: 0.0001
+    patience: 15
+    min_delta: 0.00001
 
   device: "cuda"
 
