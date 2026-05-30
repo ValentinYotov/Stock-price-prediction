@@ -29,6 +29,11 @@ from src.data.feature_engineering import (  # noqa: E402
     create_all_features,
 )
 from src.data.loader import load_raw_dataset  # noqa: E402
+from src.data.news_sentiment import (  # noqa: E402
+    NEWS_FEATURE_COLUMNS,
+    load_daily_sentiment,
+    merge_sentiment_features,
+)
 from src.data.preprocessor import preprocess_data  # noqa: E402
 from src.models.transformer_model import StockTransformer  # noqa: E402
 from src.simulation.engine import BacktestEngine  # noqa: E402
@@ -65,7 +70,7 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # Cached loaders
 # ---------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Зареждане на модел...")
+@st.cache_resource(show_spinner="Loading model...")
 def load_model_and_config():
     config = load_config()
     checkpoint_name = getattr(config.paths, "checkpoint_file", "best_model_base.pt")
@@ -114,7 +119,7 @@ def load_model_and_config():
     return model, config, info
 
 
-@st.cache_data(show_spinner="Зареждане на пазарни данни...")
+@st.cache_data(show_spinner="Loading market data...")
 def load_market_data():
     config = load_config()
     df = load_raw_dataset(config=config)
@@ -124,7 +129,7 @@ def load_market_data():
     return df
 
 
-@st.cache_data(show_spinner="Зареждане на simulation параметри...")
+@st.cache_data(show_spinner="Loading simulation parameters...")
 def load_sim_defaults():
     config_path = _cfg.PROJECT_ROOT / "configs" / "default_config.yaml"
     with config_path.open("r", encoding="utf-8") as f:
@@ -455,6 +460,247 @@ def trades_dataframe(res) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# News experiment (notebooks 14/15): models trained on the 2021-2023 window
+# with and without daily news sentiment features.
+# ---------------------------------------------------------------------------
+NEWS_EXP_CTX = 20
+NEWS_EXP_N_HEADS = 4
+NEWS_PRICES_PATH = PROJECT_ROOT / "data" / "raw" / "prices_news_window.parquet"
+
+
+@st.cache_resource(show_spinner="Loading news-experiment models...")
+def load_news_models():
+    cfg = load_config()
+    models = {}
+    for tag in ["base", "news"]:
+        path = PROJECT_ROOT / cfg.paths.models_dir / f"best_model_newsexp_{tag}.pt"
+        if not path.exists():
+            return None
+        ckpt = torch.load(path, map_location="cpu")
+        sd = ckpt["model_state_dict"]
+        input_dim = sd["input_projection.weight"].shape[1]
+        d_model = sd["input_projection.weight"].shape[0]
+        n_layers = len(
+            [k for k in sd if "encoder.layers" in k and "self_attention.w_q.weight" in k]
+        )
+        d_ff = sd["encoder.layers.0.feed_forward.linear1.weight"].shape[0]
+        m = StockTransformer(
+            input_dim=input_dim,
+            d_model=d_model,
+            n_heads=NEWS_EXP_N_HEADS,
+            n_layers=n_layers,
+            d_ff=d_ff,
+            dropout=cfg.model.dropout,
+            activation=cfg.model.activation,
+            prediction_horizon=1,
+        )
+        m.load_state_dict(sd)
+        m.eval()
+        models[tag] = {"model": m, "val_loss": ckpt.get("score"), "input_dim": input_dim}
+    return models
+
+
+@st.cache_data(show_spinner="Loading news-window prices...")
+def load_news_prices():
+    if not NEWS_PRICES_PATH.exists():
+        return None
+    df = pd.read_parquet(NEWS_PRICES_PATH)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+@st.cache_data(show_spinner="Loading daily sentiment...")
+def load_sentiment_table():
+    return load_daily_sentiment(config=load_config())
+
+
+def run_news_backtest(
+    ticker: str,
+    prices_df: pd.DataFrame,
+    sentiment_df: pd.DataFrame,
+    model: StockTransformer,
+    use_news: bool,
+    config,
+    entry_quantile: float,
+    exit_quantile: float,
+    initial_capital: float,
+    position_size_pct: float,
+    commission_pct: float,
+    risk_free_rate_annual: float,
+):
+    ctx = NEWS_EXP_CTX
+    price_col = config.data.price_column
+    target_col = config.data.target_column
+
+    ticker_df = prices_df[prices_df["symbol"] == ticker]
+    if len(ticker_df) < ctx + 60:
+        raise ValueError(f"Too few rows for {ticker}: {len(ticker_df)}")
+
+    full = build_features(ticker_df, config)
+    if use_news:
+        full = merge_sentiment_features(
+            full, sentiment_df, date_column="date", symbol_column="symbol"
+        )
+    full = full.dropna().sort_values("date").reset_index(drop=True)
+
+    feature_columns = [
+        c
+        for c in full.columns
+        if c not in {"date", "symbol", price_col, target_col}
+        and full[c].dtype in ["float64", "int64", "float32", "int32"]
+    ]
+    expected_input = model.input_projection.in_features
+    if len(feature_columns) != expected_input:
+        raise ValueError(
+            f"{ticker}: feature count {len(feature_columns)} != model input_dim {expected_input}"
+        )
+
+    n = len(full)
+    train_end = int(n * config.data.train_split)
+    test_start = int(n * (config.data.train_split + config.data.val_split))
+
+    scaler = StandardScaler().fit(full.iloc[:train_end][feature_columns])
+    scaled = full.copy()
+    scaled[feature_columns] = scaler.transform(scaled[feature_columns])
+
+    seq_start = max(0, test_start - ctx + 1)
+    seg = scaled.iloc[seq_start:].reset_index(drop=True)
+
+    stacked = np.column_stack(
+        [seg[feature_columns].values, seg[target_col].values.reshape(-1, 1)]
+    )
+    seq_X, seq_y = create_sequences(stacked, ctx, 1)
+    if len(seq_X) == 0:
+        raise ValueError("No sequences could be built.")
+
+    X = seq_X[:, :, :-1]
+    actual_returns = seq_y[:, -1, -1]
+    prices = seg[price_col].values[ctx : ctx + len(seq_X)]
+    dates = seg["date"].values[ctx : ctx + len(seq_X)]
+    sentiment_series = (
+        seg["news_compound"].values[ctx : ctx + len(seq_X)]
+        if "news_compound" in seg.columns
+        else None
+    )
+
+    pred_batches = []
+    with torch.no_grad():
+        for start in range(0, len(X), 128):
+            batch_x = torch.FloatTensor(X[start : start + 128])
+            pred_batches.append(model(batch_x).detach().cpu())
+    predicted_returns = torch.cat(pred_batches).numpy().reshape(-1)
+
+    entry_thr = float(np.quantile(predicted_returns, entry_quantile))
+    exit_thr = float(np.quantile(predicted_returns, exit_quantile))
+
+    engine = BacktestEngine(
+        initial_capital=initial_capital,
+        position_size_pct=position_size_pct,
+        commission_pct=commission_pct,
+    )
+    result = engine.run_from_log_returns(
+        prices=prices,
+        predicted_returns=predicted_returns,
+        dates=dates,
+        entry_threshold=entry_thr,
+        exit_threshold=exit_thr,
+        signal_mode="band",
+    )
+    metrics = compute_metrics(
+        result,
+        initial_capital=initial_capital,
+        risk_free_rate_annual=risk_free_rate_annual,
+        prices=prices,
+    )
+
+    buy_signals = sum(
+        1
+        for p in predicted_returns
+        if signal_from_return_band(p, False, entry_thr, exit_thr) == "buy"
+    )
+    directional_acc = float(np.mean(np.sign(predicted_returns) == np.sign(actual_returns)))
+
+    return {
+        "ticker": ticker,
+        "variant": "news" if use_news else "base",
+        "result": result,
+        "metrics": metrics,
+        "dates": dates,
+        "prices": prices,
+        "predicted_returns": predicted_returns,
+        "actual_returns": actual_returns,
+        "sentiment": sentiment_series,
+        "entry_thr": entry_thr,
+        "exit_thr": exit_thr,
+        "buy_signal_pct": 100 * buy_signals / len(prices),
+        "directional_acc_pct": 100 * directional_acc,
+        "in_training_set": False,
+    }
+
+
+def plot_equity_comparison(res_base, res_news):
+    """Overlay the two strategies' equity curves plus buy & hold."""
+    dates = pd.to_datetime(res_base["dates"])
+    prices = res_base["prices"]
+    eq_base = res_base["result"].equity_curve
+    eq_news = res_news["result"].equity_curve
+    initial = eq_base[0] if len(eq_base) else 0
+    bh = (initial / prices[0]) * prices if len(prices) else None
+
+    fig = go.Figure()
+    if bh is not None:
+        fig.add_trace(
+            go.Scatter(x=dates, y=bh, name="Buy & hold",
+                       line=dict(color=COLOR_BH, width=2, dash="dot"))
+        )
+    fig.add_trace(
+        go.Scatter(x=dates, y=eq_base, name="Base (technical only)",
+                   line=dict(color="#94a3b8", width=2.5))
+    )
+    fig.add_trace(
+        go.Scatter(x=dates, y=eq_news, name="News (technical + sentiment)",
+                   line=dict(color=COLOR_STRATEGY, width=2.5))
+    )
+    fig.update_layout(
+        height=460,
+        margin=dict(l=10, r=10, t=40, b=10),
+        title="Portfolio value: base vs news model",
+        template="plotly_dark",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    fig.update_yaxes(title_text="$")
+    return fig
+
+
+def plot_price_with_sentiment(res):
+    """Price line with daily sentiment bars underneath (news variant)."""
+    dates = pd.to_datetime(res["dates"])
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
+        row_heights=[0.7, 0.3], subplot_titles=("Price", "Daily news sentiment"),
+    )
+    fig.add_trace(
+        go.Scatter(x=dates, y=res["prices"], name="close",
+                   line=dict(color="#e5e7eb", width=1.8)),
+        row=1, col=1,
+    )
+    sent = res.get("sentiment")
+    if sent is not None:
+        colors = ["#22c55e" if s > 0 else "#ef4444" for s in sent]
+        fig.add_trace(
+            go.Bar(x=dates, y=sent, name="compound", marker_color=colors, opacity=0.6),
+            row=2, col=1,
+        )
+    fig.update_layout(
+        height=440, margin=dict(l=10, r=10, t=40, b=10),
+        template="plotly_dark", showlegend=False,
+    )
+    fig.update_yaxes(title_text="$", row=1, col=1)
+    fig.update_yaxes(title_text="compound", row=2, col=1)
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 model, config, model_info = load_model_and_config()
@@ -467,27 +713,43 @@ training_list = sorted([t for t in available_tickers if t in training_tickers])
 unseen_list = sorted([t for t in available_tickers if t not in training_tickers])
 
 
-with st.sidebar:
-    st.title("⚙️  Контроли")
+MODE_BASE = "Base model (2015-2020)"
+MODE_NEWS = "News experiment (2021-2023)"
 
-    st.markdown("**Тикер**")
-    group = st.radio(
-        "Източник",
-        options=["Training", "Unseen", "Всички"],
-        index=1,
-        horizontal=True,
-    )
-    if group == "Training":
-        ticker_options = training_list
-    elif group == "Unseen":
-        ticker_options = unseen_list
+with st.sidebar:
+    st.title("⚙️  Controls")
+
+    mode = st.radio("Mode", options=[MODE_BASE, MODE_NEWS], index=0)
+    st.markdown("---")
+
+    if mode == MODE_BASE:
+        st.markdown("**Ticker**")
+        group = st.radio(
+            "Source",
+            options=["Training", "Unseen", "All"],
+            index=1,
+            horizontal=True,
+        )
+        if group == "Training":
+            ticker_options = training_list
+        elif group == "Unseen":
+            ticker_options = unseen_list
+        else:
+            ticker_options = available_tickers
     else:
-        ticker_options = available_tickers
-    default_idx = ticker_options.index("AAPL") if "AAPL" in ticker_options else 0
-    ticker = st.selectbox("Тикер", options=ticker_options, index=default_idx)
+        news_prices = load_news_prices()
+        ticker_options = (
+            sorted(news_prices["symbol"].unique()) if news_prices is not None else []
+        )
+
+    if ticker_options:
+        default_idx = ticker_options.index("AAPL") if "AAPL" in ticker_options else 0
+        ticker = st.selectbox("Ticker", options=ticker_options, index=default_idx)
+    else:
+        ticker = None
 
     st.markdown("---")
-    st.markdown("**Стратегия (band thresholds)**")
+    st.markdown("**Strategy (band thresholds)**")
     entry_quantile = st.slider(
         "Entry quantile", min_value=0.50, max_value=0.95, value=0.70, step=0.05
     )
@@ -496,7 +758,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown("**Портфолио**")
+    st.markdown("**Portfolio**")
     initial_capital = st.number_input(
         "Initial capital ($)",
         min_value=1000.0,
@@ -523,62 +785,49 @@ with st.sidebar:
     run = st.button("▶  Run backtest", use_container_width=True, type="primary")
 
 
-# Header
-st.title("📈  Stock Forecasting — Base model")
-st.markdown(
-    "<div class='small-note'>Transformer baseline върху технически индикатори. "
-    "Прогнозира next-day log return; band rule превръща прогнозите в trading сигнали.</div>",
-    unsafe_allow_html=True,
-)
+risk_free = float(sim_defaults.get("risk_free_rate_annual", 0.03))
 
-# Model card
-with st.container():
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Checkpoint", model_info["checkpoint"])
-    c2.metric(
-        "Best val loss",
-        f"{model_info['val_loss']:.6f}" if model_info["val_loss"] is not None else "-",
+
+def render_base_mode():
+    st.title("📈  Stock Forecasting — Base model")
+    st.markdown(
+        "<div class='small-note'>Transformer baseline on technical indicators. "
+        "Predicts next-day log return; a band rule turns predictions into trading signals.</div>",
+        unsafe_allow_html=True,
     )
-    c3.metric("Architecture", f"d={model_info['d_model']} · L={model_info['n_layers']}")
-    c4.metric("Parameters", f"{model_info['n_params']:,}")
-    c5.metric("Training tickers", f"{len(training_tickers)}")
+    st.markdown("---")
 
-st.markdown("---")
-
-
-# Results section
-if "last_result" not in st.session_state:
-    st.session_state["last_result"] = None
-
-placeholder_status = st.empty()
-
-if run:
-    risk_free = float(sim_defaults.get("risk_free_rate_annual", 0.03))
-    try:
-        with st.spinner(f"Backtesting {ticker}..."):
-            res = run_backtest_for_ticker(
-                ticker=ticker,
-                raw_df=raw_df,
-                model=model,
-                config=config,
-                entry_quantile=entry_quantile,
-                exit_quantile=exit_quantile,
-                initial_capital=initial_capital,
-                position_size_pct=position_size_pct,
-                commission_pct=commission_pct,
-                risk_free_rate_annual=risk_free,
-            )
-        st.session_state["last_result"] = res
-    except Exception as e:
-        placeholder_status.error(f"Грешка за {ticker}: {e}")
+    if "last_result" not in st.session_state:
         st.session_state["last_result"] = None
 
-res = st.session_state["last_result"]
-if res is None:
-    st.info("Избери тикер от левия панел и натисни **Run backtest**.")
-else:
-    m = res["metrics"]
+    placeholder_status = st.empty()
 
+    if run and ticker is not None:
+        try:
+            with st.spinner(f"Backtesting {ticker}..."):
+                res = run_backtest_for_ticker(
+                    ticker=ticker,
+                    raw_df=raw_df,
+                    model=model,
+                    config=config,
+                    entry_quantile=entry_quantile,
+                    exit_quantile=exit_quantile,
+                    initial_capital=initial_capital,
+                    position_size_pct=position_size_pct,
+                    commission_pct=commission_pct,
+                    risk_free_rate_annual=risk_free,
+                )
+            st.session_state["last_result"] = res
+        except Exception as e:
+            placeholder_status.error(f"Error for {ticker}: {e}")
+            st.session_state["last_result"] = None
+
+    res = st.session_state["last_result"]
+    if res is None:
+        st.info("Pick a ticker from the left panel and press **Run backtest**.")
+        return
+
+    m = res["metrics"]
     origin = "training" if res["in_training_set"] else "unseen"
     st.subheader(f"{res['ticker']} ({origin})")
 
@@ -610,10 +859,10 @@ else:
     st.plotly_chart(plot_equity_and_drawdown(res), use_container_width=True)
     st.plotly_chart(plot_predictions_with_trades(res), use_container_width=True)
 
-    with st.expander("Сделки (trade log)"):
+    with st.expander("Trade log"):
         df_trades = trades_dataframe(res)
         if df_trades.empty:
-            st.write("Няма сделки за този период.")
+            st.write("No trades in this period.")
         else:
             st.dataframe(df_trades, use_container_width=True, height=320)
 
@@ -623,7 +872,113 @@ else:
         else "n/a"
     )
     st.caption(
-        f"Test window: {len(res['prices'])} дни. "
+        f"Test window: {len(res['prices'])} days. "
         f"Entry threshold: {res['entry_thr']:+.5f}, exit threshold: {res['exit_thr']:+.5f}. "
         f"Model: {model_info['checkpoint']} (val_loss={val_loss_str})."
     )
+
+
+def render_news_mode():
+    st.title("📰  News experiment — base vs news model")
+    st.markdown(
+        "<div class='small-note'>Two models trained on the 2021-2023 window (yfinance prices). "
+        "Same architecture and split; the news model adds 6 daily sentiment features. "
+        "This compares their trading simulation side by side.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("---")
+
+    news_models = load_news_models()
+    news_prices = load_news_prices()
+
+    if news_models is None or news_prices is None:
+        st.warning(
+            "News-experiment artifacts not found. Run these first:\n\n"
+            "1. `python scripts/prepare_news_sentiment.py`\n"
+            "2. `python scripts/fetch_prices_for_news.py`\n"
+            "3. Run notebook `15_train_with_sentiment.ipynb` (creates "
+            "`best_model_newsexp_base.pt` and `best_model_newsexp_news.pt`)."
+        )
+        return
+
+    sentiment_df = load_sentiment_table()
+
+    if "last_news_result" not in st.session_state:
+        st.session_state["last_news_result"] = None
+
+    placeholder_status = st.empty()
+
+    if run and ticker is not None:
+        try:
+            with st.spinner(f"Backtesting {ticker} (base + news)..."):
+                res_base = run_news_backtest(
+                    ticker, news_prices, sentiment_df, news_models["base"]["model"],
+                    use_news=False, config=config, entry_quantile=entry_quantile,
+                    exit_quantile=exit_quantile, initial_capital=initial_capital,
+                    position_size_pct=position_size_pct, commission_pct=commission_pct,
+                    risk_free_rate_annual=risk_free,
+                )
+                res_news = run_news_backtest(
+                    ticker, news_prices, sentiment_df, news_models["news"]["model"],
+                    use_news=True, config=config, entry_quantile=entry_quantile,
+                    exit_quantile=exit_quantile, initial_capital=initial_capital,
+                    position_size_pct=position_size_pct, commission_pct=commission_pct,
+                    risk_free_rate_annual=risk_free,
+                )
+            st.session_state["last_news_result"] = (res_base, res_news)
+        except Exception as e:
+            placeholder_status.error(f"Error for {ticker}: {e}")
+            st.session_state["last_news_result"] = None
+
+    pair = st.session_state["last_news_result"]
+    if pair is None:
+        st.info("Pick a ticker from the left panel and press **Run backtest**.")
+        return
+
+    res_base, res_news = pair
+    mb, mn = res_base["metrics"], res_news["metrics"]
+    st.subheader(f"{res_base['ticker']}  (test window: {len(res_base['prices'])} days)")
+
+    col_base, col_news = st.columns(2)
+    with col_base:
+        st.markdown("#### Base (technical only)")
+        st.metric("Strategy return", f"{mb.total_return_pct:+.2f}%")
+        st.metric("Sharpe (ann.)", f"{mb.sharpe_ratio_annual:.3f}")
+        st.metric("Directional acc.", f"{res_base['directional_acc_pct']:.1f}%")
+        st.metric("Trades", f"{mb.num_trades}")
+    with col_news:
+        st.markdown("#### News (technical + sentiment)")
+        st.metric(
+            "Strategy return",
+            f"{mn.total_return_pct:+.2f}%",
+            delta=f"{mn.total_return_pct - mb.total_return_pct:+.2f} pp",
+        )
+        st.metric(
+            "Sharpe (ann.)",
+            f"{mn.sharpe_ratio_annual:.3f}",
+            delta=f"{mn.sharpe_ratio_annual - mb.sharpe_ratio_annual:+.3f}",
+        )
+        st.metric(
+            "Directional acc.",
+            f"{res_news['directional_acc_pct']:.1f}%",
+            delta=f"{res_news['directional_acc_pct'] - res_base['directional_acc_pct']:+.1f} pp",
+        )
+        st.metric("Trades", f"{mn.num_trades}")
+
+    bh = mb.buy_and_hold_return_pct
+    st.caption(f"Buy & hold over the same window: {bh:+.2f}%" if bh is not None else "")
+
+    st.plotly_chart(plot_equity_comparison(res_base, res_news), use_container_width=True)
+    st.plotly_chart(plot_price_with_sentiment(res_news), use_container_width=True)
+
+    st.caption(
+        f"Models: best_model_newsexp_base.pt (val_loss={news_models['base']['val_loss']:.6f}), "
+        f"best_model_newsexp_news.pt (val_loss={news_models['news']['val_loss']:.6f}). "
+        f"Context window: {NEWS_EXP_CTX} days."
+    )
+
+
+if mode == MODE_BASE:
+    render_base_mode()
+else:
+    render_news_mode()

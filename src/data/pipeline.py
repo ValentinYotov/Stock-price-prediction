@@ -92,6 +92,20 @@ def extract_dataset(
             "use 'log_return' or ensure the column exists after feature engineering"
         )
 
+    if config.data.use_news:
+        from src.data.news_sentiment import (
+            load_daily_sentiment,
+            merge_sentiment_features,
+        )
+
+        sentiment = load_daily_sentiment(config=config)
+        df = merge_sentiment_features(
+            df,
+            sentiment,
+            date_column=date_column,
+            symbol_column=symbol_column,
+        )
+
     df = df.dropna()
 
     feature_columns = _exclude_columns_for_features(
