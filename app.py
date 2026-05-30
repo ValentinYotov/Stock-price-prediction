@@ -77,7 +77,7 @@ def load_model_and_config():
     if not checkpoint_path.exists():
         raise FileNotFoundError(
             f"Checkpoint not found: {checkpoint_path}. "
-            "Train the base model first (notebooks/03_train_model.ipynb)."
+            "Train the base model first (notebooks/01_train_model.ipynb)."
         )
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     state_dict = checkpoint["model_state_dict"]
