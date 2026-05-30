@@ -54,6 +54,7 @@ class DataConfig:
     hero_ticker: Optional[str] = None
     use_news: bool = False
     news_cache_dir: str = "data/processed/news_cache"
+    news_sentiment_file: str = "data/news/daily_sentiment_2015_2020.parquet"
     features: DataFeaturesConfig = field(default_factory=DataFeaturesConfig)
 
     @classmethod
@@ -82,6 +83,9 @@ class DataConfig:
             hero_ticker=hero_ticker,
             use_news=bool(data.get("use_news", False)),
             news_cache_dir=str(data.get("news_cache_dir", "data/processed/news_cache")),
+            news_sentiment_file=str(
+                data.get("news_sentiment_file", "data/news/daily_sentiment_2015_2020.parquet")
+            ),
             features=features_cfg,
         )
 

@@ -30,7 +30,6 @@ from src.data.feature_engineering import (  # noqa: E402
 )
 from src.data.loader import load_raw_dataset  # noqa: E402
 from src.data.news_sentiment import (  # noqa: E402
-    NEWS_FEATURE_COLUMNS,
     load_daily_sentiment,
     merge_sentiment_features,
 )
@@ -140,7 +139,9 @@ def load_sim_defaults():
 # ---------------------------------------------------------------------------
 # Backtest pipeline (mirrors notebook 13)
 # ---------------------------------------------------------------------------
-def build_features(ticker_df: pd.DataFrame, config) -> pd.DataFrame:
+def build_features(
+    ticker_df: pd.DataFrame, config, sentiment_df: pd.DataFrame | None = None
+) -> pd.DataFrame:
     df = ticker_df.copy()
     df, _ = preprocess_data(
         df,
@@ -171,6 +172,10 @@ def build_features(ticker_df: pd.DataFrame, config) -> pd.DataFrame:
             target_column=config.data.target_column,
             symbol_column="symbol",
         )
+    if sentiment_df is not None:
+        df = merge_sentiment_features(
+            df, sentiment_df, date_column="date", symbol_column="symbol"
+        )
     return df.dropna().sort_values("date").reset_index(drop=True)
 
 
@@ -185,12 +190,13 @@ def run_backtest_for_ticker(
     position_size_pct: float,
     commission_pct: float,
     risk_free_rate_annual: float,
+    sentiment_df: pd.DataFrame | None = None,
 ):
     ticker_df = raw_df[raw_df["symbol"] == ticker]
     if len(ticker_df) < 200:
         raise ValueError(f"Too few rows for {ticker}: {len(ticker_df)}")
 
-    full = build_features(ticker_df, config)
+    full = build_features(ticker_df, config, sentiment_df=sentiment_df)
     if len(full) < config.data.context_length + 50:
         raise ValueError(f"Not enough rows after feature engineering: {len(full)}")
 
@@ -236,6 +242,11 @@ def run_backtest_for_ticker(
     )
     prices = seg[price_col].values[ctx : ctx + len(seq_X)]
     dates = seg["date"].values[ctx : ctx + len(seq_X)]
+    sentiment_series = (
+        seg["news_compound"].values[ctx : ctx + len(seq_X)]
+        if "news_compound" in seg.columns
+        else None
+    )
 
     pred_batches = []
     with torch.no_grad():
@@ -282,6 +293,7 @@ def run_backtest_for_ticker(
         "prices": prices,
         "predicted_returns": predicted_returns,
         "actual_returns": actual_returns,
+        "sentiment": sentiment_series,
         "entry_thr": entry_thr,
         "exit_thr": exit_thr,
         "buy_signal_pct": 100 * buy_signals / len(prices),
@@ -460,182 +472,41 @@ def trades_dataframe(res) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# News experiment (notebooks 14/15): models trained on the 2021-2023 window
-# with and without daily news sentiment features.
+# News experiment: the SAME main model (2015-2020) with vs without FinBERT news
+# sentiment features. best_model_base.pt vs best_model_news.pt on identical data.
 # ---------------------------------------------------------------------------
-NEWS_EXP_CTX = 20
-NEWS_EXP_N_HEADS = 4
-NEWS_PRICES_PATH = PROJECT_ROOT / "data" / "raw" / "prices_news_window.parquet"
-
-
-@st.cache_resource(show_spinner="Loading news-experiment models...")
-def load_news_models():
+@st.cache_resource(show_spinner="Loading news-enhanced model...")
+def load_news_model():
     cfg = load_config()
-    models = {}
-    for tag in ["base", "news"]:
-        path = PROJECT_ROOT / cfg.paths.models_dir / f"best_model_newsexp_{tag}.pt"
-        if not path.exists():
-            return None
-        ckpt = torch.load(path, map_location="cpu")
-        sd = ckpt["model_state_dict"]
-        input_dim = sd["input_projection.weight"].shape[1]
-        d_model = sd["input_projection.weight"].shape[0]
-        n_layers = len(
-            [k for k in sd if "encoder.layers" in k and "self_attention.w_q.weight" in k]
-        )
-        d_ff = sd["encoder.layers.0.feed_forward.linear1.weight"].shape[0]
-        m = StockTransformer(
-            input_dim=input_dim,
-            d_model=d_model,
-            n_heads=NEWS_EXP_N_HEADS,
-            n_layers=n_layers,
-            d_ff=d_ff,
-            dropout=cfg.model.dropout,
-            activation=cfg.model.activation,
-            prediction_horizon=1,
-        )
-        m.load_state_dict(sd)
-        m.eval()
-        models[tag] = {"model": m, "val_loss": ckpt.get("score"), "input_dim": input_dim}
-    return models
-
-
-@st.cache_data(show_spinner="Loading news-window prices...")
-def load_news_prices():
-    if not NEWS_PRICES_PATH.exists():
+    path = PROJECT_ROOT / cfg.paths.models_dir / "best_model_news.pt"
+    if not path.exists():
         return None
-    df = pd.read_parquet(NEWS_PRICES_PATH)
-    df["date"] = pd.to_datetime(df["date"])
-    return df
+    ckpt = torch.load(path, map_location="cpu")
+    sd = ckpt["model_state_dict"]
+    input_dim = sd["input_projection.weight"].shape[1]
+    d_model = sd["input_projection.weight"].shape[0]
+    n_layers = len(
+        [k for k in sd if "encoder.layers" in k and "self_attention.w_q.weight" in k]
+    )
+    d_ff = sd["encoder.layers.0.feed_forward.linear1.weight"].shape[0]
+    m = StockTransformer(
+        input_dim=input_dim,
+        d_model=d_model,
+        n_heads=cfg.model.n_heads,
+        n_layers=n_layers,
+        d_ff=d_ff,
+        dropout=cfg.model.dropout,
+        activation=cfg.model.activation,
+        prediction_horizon=cfg.data.prediction_horizon,
+    )
+    m.load_state_dict(sd)
+    m.eval()
+    return {"model": m, "val_loss": ckpt.get("score"), "input_dim": input_dim}
 
 
 @st.cache_data(show_spinner="Loading daily sentiment...")
 def load_sentiment_table():
     return load_daily_sentiment(config=load_config())
-
-
-def run_news_backtest(
-    ticker: str,
-    prices_df: pd.DataFrame,
-    sentiment_df: pd.DataFrame,
-    model: StockTransformer,
-    use_news: bool,
-    config,
-    entry_quantile: float,
-    exit_quantile: float,
-    initial_capital: float,
-    position_size_pct: float,
-    commission_pct: float,
-    risk_free_rate_annual: float,
-):
-    ctx = NEWS_EXP_CTX
-    price_col = config.data.price_column
-    target_col = config.data.target_column
-
-    ticker_df = prices_df[prices_df["symbol"] == ticker]
-    if len(ticker_df) < ctx + 60:
-        raise ValueError(f"Too few rows for {ticker}: {len(ticker_df)}")
-
-    full = build_features(ticker_df, config)
-    if use_news:
-        full = merge_sentiment_features(
-            full, sentiment_df, date_column="date", symbol_column="symbol"
-        )
-    full = full.dropna().sort_values("date").reset_index(drop=True)
-
-    feature_columns = [
-        c
-        for c in full.columns
-        if c not in {"date", "symbol", price_col, target_col}
-        and full[c].dtype in ["float64", "int64", "float32", "int32"]
-    ]
-    expected_input = model.input_projection.in_features
-    if len(feature_columns) != expected_input:
-        raise ValueError(
-            f"{ticker}: feature count {len(feature_columns)} != model input_dim {expected_input}"
-        )
-
-    n = len(full)
-    train_end = int(n * config.data.train_split)
-    test_start = int(n * (config.data.train_split + config.data.val_split))
-
-    scaler = StandardScaler().fit(full.iloc[:train_end][feature_columns])
-    scaled = full.copy()
-    scaled[feature_columns] = scaler.transform(scaled[feature_columns])
-
-    seq_start = max(0, test_start - ctx + 1)
-    seg = scaled.iloc[seq_start:].reset_index(drop=True)
-
-    stacked = np.column_stack(
-        [seg[feature_columns].values, seg[target_col].values.reshape(-1, 1)]
-    )
-    seq_X, seq_y = create_sequences(stacked, ctx, 1)
-    if len(seq_X) == 0:
-        raise ValueError("No sequences could be built.")
-
-    X = seq_X[:, :, :-1]
-    actual_returns = seq_y[:, -1, -1]
-    prices = seg[price_col].values[ctx : ctx + len(seq_X)]
-    dates = seg["date"].values[ctx : ctx + len(seq_X)]
-    sentiment_series = (
-        seg["news_compound"].values[ctx : ctx + len(seq_X)]
-        if "news_compound" in seg.columns
-        else None
-    )
-
-    pred_batches = []
-    with torch.no_grad():
-        for start in range(0, len(X), 128):
-            batch_x = torch.FloatTensor(X[start : start + 128])
-            pred_batches.append(model(batch_x).detach().cpu())
-    predicted_returns = torch.cat(pred_batches).numpy().reshape(-1)
-
-    entry_thr = float(np.quantile(predicted_returns, entry_quantile))
-    exit_thr = float(np.quantile(predicted_returns, exit_quantile))
-
-    engine = BacktestEngine(
-        initial_capital=initial_capital,
-        position_size_pct=position_size_pct,
-        commission_pct=commission_pct,
-    )
-    result = engine.run_from_log_returns(
-        prices=prices,
-        predicted_returns=predicted_returns,
-        dates=dates,
-        entry_threshold=entry_thr,
-        exit_threshold=exit_thr,
-        signal_mode="band",
-    )
-    metrics = compute_metrics(
-        result,
-        initial_capital=initial_capital,
-        risk_free_rate_annual=risk_free_rate_annual,
-        prices=prices,
-    )
-
-    buy_signals = sum(
-        1
-        for p in predicted_returns
-        if signal_from_return_band(p, False, entry_thr, exit_thr) == "buy"
-    )
-    directional_acc = float(np.mean(np.sign(predicted_returns) == np.sign(actual_returns)))
-
-    return {
-        "ticker": ticker,
-        "variant": "news" if use_news else "base",
-        "result": result,
-        "metrics": metrics,
-        "dates": dates,
-        "prices": prices,
-        "predicted_returns": predicted_returns,
-        "actual_returns": actual_returns,
-        "sentiment": sentiment_series,
-        "entry_thr": entry_thr,
-        "exit_thr": exit_thr,
-        "buy_signal_pct": 100 * buy_signals / len(prices),
-        "directional_acc_pct": 100 * directional_acc,
-        "in_training_set": False,
-    }
 
 
 def plot_equity_comparison(res_base, res_news):
@@ -714,7 +585,7 @@ unseen_list = sorted([t for t in available_tickers if t not in training_tickers]
 
 
 MODE_BASE = "Base model (2015-2020)"
-MODE_NEWS = "News experiment (2021-2023)"
+MODE_NEWS = "News: base vs sentiment (2015-2020)"
 
 with st.sidebar:
     st.title("⚙️  Controls")
@@ -737,13 +608,17 @@ with st.sidebar:
         else:
             ticker_options = available_tickers
     else:
-        news_prices = load_news_prices()
-        ticker_options = (
-            sorted(news_prices["symbol"].unique()) if news_prices is not None else []
-        )
+        sent_tbl = load_sentiment_table()
+        news_syms = set(sent_tbl["symbol"].unique())
+        ticker_options = sorted([t for t in available_tickers if t in news_syms])
 
     if ticker_options:
-        default_idx = ticker_options.index("AAPL") if "AAPL" in ticker_options else 0
+        if mode == MODE_NEWS and "NFLX" in ticker_options:
+            default_idx = ticker_options.index("NFLX")
+        elif "AAPL" in ticker_options:
+            default_idx = ticker_options.index("AAPL")
+        else:
+            default_idx = 0
         ticker = st.selectbox("Ticker", options=ticker_options, index=default_idx)
     else:
         ticker = None
@@ -879,25 +754,22 @@ def render_base_mode():
 
 
 def render_news_mode():
-    st.title("📰  News experiment — base vs news model")
+    st.title("📰  News experiment — same model, with vs without sentiment")
     st.markdown(
-        "<div class='small-note'>Two models trained on the 2021-2023 window (yfinance prices). "
-        "Same architecture and split; the news model adds 6 daily sentiment features. "
-        "This compares their trading simulation side by side.</div>",
+        "<div class='small-note'>The same main model on 2015-2020 data, compared with and without "
+        "6 FinBERT daily-sentiment features. Identical architecture, period and split &mdash; the only "
+        "difference is the news input. This is a direct apples-to-apples comparison.</div>",
         unsafe_allow_html=True,
     )
     st.markdown("---")
 
-    news_models = load_news_models()
-    news_prices = load_news_prices()
-
-    if news_models is None or news_prices is None:
+    news_model = load_news_model()
+    if news_model is None:
         st.warning(
-            "News-experiment artifacts not found. Run these first:\n\n"
-            "1. `python scripts/prepare_news_sentiment.py`\n"
-            "2. `python scripts/fetch_prices_for_news.py`\n"
-            "3. Run notebook `15_train_with_sentiment.ipynb` (creates "
-            "`best_model_newsexp_base.pt` and `best_model_newsexp_news.pt`)."
+            "News-enhanced model not found. Build it first:\n\n"
+            "1. `py -3.11 scripts/fetch_fnspid_news.py`\n"
+            "2. `py -3.11 scripts/score_news_finbert.py`\n"
+            "3. `py -3.11 scripts/train_news.py`  (creates `best_model_news.pt`)"
         )
         return
 
@@ -911,19 +783,19 @@ def render_news_mode():
     if run and ticker is not None:
         try:
             with st.spinner(f"Backtesting {ticker} (base + news)..."):
-                res_base = run_news_backtest(
-                    ticker, news_prices, sentiment_df, news_models["base"]["model"],
-                    use_news=False, config=config, entry_quantile=entry_quantile,
-                    exit_quantile=exit_quantile, initial_capital=initial_capital,
-                    position_size_pct=position_size_pct, commission_pct=commission_pct,
-                    risk_free_rate_annual=risk_free,
+                res_base = run_backtest_for_ticker(
+                    ticker=ticker, raw_df=raw_df, model=model, config=config,
+                    entry_quantile=entry_quantile, exit_quantile=exit_quantile,
+                    initial_capital=initial_capital, position_size_pct=position_size_pct,
+                    commission_pct=commission_pct, risk_free_rate_annual=risk_free,
+                    sentiment_df=None,
                 )
-                res_news = run_news_backtest(
-                    ticker, news_prices, sentiment_df, news_models["news"]["model"],
-                    use_news=True, config=config, entry_quantile=entry_quantile,
-                    exit_quantile=exit_quantile, initial_capital=initial_capital,
-                    position_size_pct=position_size_pct, commission_pct=commission_pct,
-                    risk_free_rate_annual=risk_free,
+                res_news = run_backtest_for_ticker(
+                    ticker=ticker, raw_df=raw_df, model=news_model["model"], config=config,
+                    entry_quantile=entry_quantile, exit_quantile=exit_quantile,
+                    initial_capital=initial_capital, position_size_pct=position_size_pct,
+                    commission_pct=commission_pct, risk_free_rate_annual=risk_free,
+                    sentiment_df=sentiment_df,
                 )
             st.session_state["last_news_result"] = (res_base, res_news)
         except Exception as e:
@@ -937,7 +809,11 @@ def render_news_mode():
 
     res_base, res_news = pair
     mb, mn = res_base["metrics"], res_news["metrics"]
-    st.subheader(f"{res_base['ticker']}  (test window: {len(res_base['prices'])} days)")
+    news_days = int(np.sum(res_news["sentiment"] != 0)) if res_news["sentiment"] is not None else 0
+    st.subheader(
+        f"{res_base['ticker']}  (test window: {len(res_base['prices'])} days, "
+        f"{news_days} with news)"
+    )
 
     col_base, col_news = st.columns(2)
     with col_base:
@@ -971,10 +847,12 @@ def render_news_mode():
     st.plotly_chart(plot_equity_comparison(res_base, res_news), use_container_width=True)
     st.plotly_chart(plot_price_with_sentiment(res_news), use_container_width=True)
 
+    base_vl = f"{model_info['val_loss']:.6f}" if model_info["val_loss"] is not None else "n/a"
+    news_vl = f"{news_model['val_loss']:.6f}" if news_model["val_loss"] is not None else "n/a"
     st.caption(
-        f"Models: best_model_newsexp_base.pt (val_loss={news_models['base']['val_loss']:.6f}), "
-        f"best_model_newsexp_news.pt (val_loss={news_models['news']['val_loss']:.6f}). "
-        f"Context window: {NEWS_EXP_CTX} days."
+        f"Models: best_model_base.pt (val_loss={base_vl}, {model_info['input_dim']} feat) vs "
+        f"best_model_news.pt (val_loss={news_vl}, {news_model['input_dim']} feat). "
+        f"Context window: {config.data.context_length} days."
     )
 
 
