@@ -28,3 +28,6 @@ tensorboard>=2.13.0  # За logging на training
 
 # Demo app
 streamlit>=1.30.0
+
+# Hyperparameter tuning
+optuna>=3.5.0

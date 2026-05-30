@@ -100,3 +100,39 @@ paths:
   models_dir: "models/checkpoints"
   checkpoint_file: "best_model_base.pt"
   results_dir: "results"
+
+# Hyperparameter tuning (scripts/tune.py).
+# Two methods are supported, both reviewer-recommended:
+#   - "grid":     exhaustive search over each parameter's `choices`.
+#   - "bayesian": Optuna Tree-structured Parzen Estimator (TPE), much faster.
+# Each trial trains a fresh model with the sampled params and returns the best
+# validation loss. The training section above is reused, with `fast_overrides`
+# applied to cap epochs so each trial is cheap.
+tuning:
+  enabled: true
+  method: "bayesian"          # "grid" | "bayesian"
+  n_trials: 20                # used only for bayesian
+  seed: 42
+  fast_overrides:             # per-trial training budget (overrides training.*)
+    num_epochs: 12
+    early_stopping_patience: 4
+  search_space:
+    learning_rate:
+      type: "loguniform"      # bayesian: continuous log range
+      low: 0.00005
+      high: 0.001
+      choices: [0.0001, 0.0002, 0.0005]   # grid fallback
+    d_model:
+      type: "categorical"
+      choices: [128, 256]
+    n_layers:
+      type: "categorical"
+      choices: [2, 4, 6]
+    dropout:
+      type: "uniform"
+      low: 0.05
+      high: 0.30
+      choices: [0.1, 0.2, 0.3]            # grid fallback
+    weight_decay:
+      type: "categorical"
+      choices: [0.0, 0.01, 0.05]

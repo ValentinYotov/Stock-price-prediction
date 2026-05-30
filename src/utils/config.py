@@ -224,12 +224,71 @@ class PathsConfig:
 
 
 @dataclass
+class SearchSpaceEntry:
+    """One hyperparameter dimension in the tuning search space.
+
+    type:
+        - "categorical": discrete choices (works for both grid and bayesian)
+        - "uniform":     continuous range (bayesian only; grid will use choices)
+        - "loguniform":  log-uniform continuous range (bayesian only)
+    """
+    type: str = "categorical"
+    choices: List[Any] = field(default_factory=list)
+    low: Optional[float] = None
+    high: Optional[float] = None
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "SearchSpaceEntry":
+        return cls(
+            type=str(data.get("type", "categorical")),
+            choices=list(data.get("choices", [])),
+            low=float(data["low"]) if "low" in data else None,
+            high=float(data["high"]) if "high" in data else None,
+        )
+
+
+@dataclass
+class TuningConfig:
+    """Hyperparameter tuning settings.
+
+    Two search methods are supported (both reviewer-suggested):
+        - "grid":     exhaustive cartesian product of `choices` for each parameter
+        - "bayesian": Optuna TPE sampler, much faster for large spaces
+
+    `fast_overrides` lets you cap epochs/early-stop during tuning so each trial
+    is cheap; the best params can then be retrained at full strength.
+    """
+    enabled: bool = False
+    method: str = "bayesian"  # "grid" | "bayesian"
+    n_trials: int = 20
+    seed: int = 42
+    fast_overrides: Dict[str, Any] = field(default_factory=dict)
+    search_space: Dict[str, SearchSpaceEntry] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "TuningConfig":
+        space = {
+            name: SearchSpaceEntry.from_dict(spec)
+            for name, spec in (data.get("search_space") or {}).items()
+        }
+        return cls(
+            enabled=bool(data.get("enabled", False)),
+            method=str(data.get("method", "bayesian")).lower(),
+            n_trials=int(data.get("n_trials", 20)),
+            seed=int(data.get("seed", 42)),
+            fast_overrides=dict(data.get("fast_overrides", {})),
+            search_space=space,
+        )
+
+
+@dataclass
 class Config:
     data: DataConfig
     model: ModelConfig
     training: TrainingConfig
     evaluation: EvaluationConfig
     paths: PathsConfig
+    tuning: TuningConfig = field(default_factory=TuningConfig)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Config":
@@ -239,6 +298,7 @@ class Config:
             training=TrainingConfig.from_dict(data.get("training", {})),
             evaluation=EvaluationConfig.from_dict(data.get("evaluation", {})),
             paths=PathsConfig.from_dict(data.get("paths", {})),
+            tuning=TuningConfig.from_dict(data.get("tuning", {})),
         )
 
 
@@ -290,6 +350,8 @@ __all__ = [
     "PathsConfig",
     "EarlyStoppingConfig",
     "OptimizerParamsConfig",
+    "TuningConfig",
+    "SearchSpaceEntry",
     "load_config",
 ]
 

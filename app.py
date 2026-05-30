@@ -305,147 +305,102 @@ def run_backtest_for_ticker(
 # ---------------------------------------------------------------------------
 # Plot helpers
 # ---------------------------------------------------------------------------
-COLOR_STRATEGY = "#3b82f6"
-COLOR_BH = "#f59e0b"
+COLOR_BH = "#f59e0b"        # buy & hold (orange, dotted)
+COLOR_BASE = "#94a3b8"      # base model (light slate)
+COLOR_NEWS = "#3b82f6"      # news model (blue)
 COLOR_BUY = "#22c55e"
 COLOR_SELL = "#ef4444"
 
 
-def plot_equity_and_drawdown(res):
-    dates = pd.to_datetime(res["dates"])
-    prices = res["prices"]
-    equity = res["result"].equity_curve
+def _drawdown(eq):
+    peak = np.maximum.accumulate(eq)
+    safe = np.where(peak <= 0, np.nan, peak)
+    return np.nan_to_num(100 * (peak - eq) / safe, nan=0.0)
 
-    bh_shares = res["metrics"].buy_and_hold_return_pct is not None
-    initial_capital = equity[0] if len(equity) else 0
-    bh_equity = (initial_capital / prices[0]) * prices if bh_shares else None
 
-    def dd(eq):
-        peak = np.maximum.accumulate(eq)
-        safe = np.where(peak <= 0, np.nan, peak)
-        return np.nan_to_num(100 * (peak - eq) / safe, nan=0.0)
+def plot_equity_and_drawdown(res_base, res_news):
+    """Overlay B&H, base and news equity curves; matching drawdowns below."""
+    dates = pd.to_datetime(res_base["dates"])
+    prices = res_base["prices"]
+    eq_base = res_base["result"].equity_curve
+    eq_news = res_news["result"].equity_curve
+    initial = eq_base[0] if len(eq_base) else 0
+    bh = (initial / prices[0]) * prices if len(prices) else None
 
     fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.08,
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
         row_heights=[0.65, 0.35],
         subplot_titles=("Portfolio value", "Drawdown %"),
     )
-    fig.add_trace(
-        go.Scatter(x=dates, y=equity, name="Strategy", line=dict(color=COLOR_STRATEGY, width=2.5)),
-        row=1,
-        col=1,
-    )
-    if bh_equity is not None:
+    if bh is not None:
         fig.add_trace(
-            go.Scatter(
-                x=dates,
-                y=bh_equity,
-                name="Buy & hold",
-                line=dict(color=COLOR_BH, width=2, dash="dot"),
-            ),
-            row=1,
-            col=1,
+            go.Scatter(x=dates, y=bh, name="Buy & hold",
+                       line=dict(color=COLOR_BH, width=2, dash="dot")),
+            row=1, col=1,
         )
     fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=dd(equity),
-            name="Strategy DD",
-            line=dict(color=COLOR_STRATEGY, width=1.5),
-            fill="tozeroy",
-            fillcolor="rgba(59,130,246,0.15)",
-            showlegend=False,
-        ),
-        row=2,
-        col=1,
+        go.Scatter(x=dates, y=eq_base, name="Base (technical)",
+                   line=dict(color=COLOR_BASE, width=2.5)),
+        row=1, col=1,
     )
-    if bh_equity is not None:
+    fig.add_trace(
+        go.Scatter(x=dates, y=eq_news, name="News (+ FinBERT sentiment)",
+                   line=dict(color=COLOR_NEWS, width=2.5)),
+        row=1, col=1,
+    )
+
+    if bh is not None:
         fig.add_trace(
-            go.Scatter(
-                x=dates,
-                y=dd(bh_equity),
-                name="B&H DD",
-                line=dict(color=COLOR_BH, width=1.5, dash="dot"),
-                showlegend=False,
-            ),
-            row=2,
-            col=1,
+            go.Scatter(x=dates, y=_drawdown(bh),
+                       line=dict(color=COLOR_BH, width=1.2, dash="dot"),
+                       showlegend=False),
+            row=2, col=1,
         )
+    fig.add_trace(
+        go.Scatter(x=dates, y=_drawdown(eq_base),
+                   line=dict(color=COLOR_BASE, width=1.5),
+                   showlegend=False),
+        row=2, col=1,
+    )
+    fig.add_trace(
+        go.Scatter(x=dates, y=_drawdown(eq_news),
+                   line=dict(color=COLOR_NEWS, width=1.5),
+                   showlegend=False),
+        row=2, col=1,
+    )
+
     fig.update_layout(
-        height=520,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        height=560, margin=dict(l=10, r=10, t=40, b=10),
         template="plotly_dark",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
     fig.update_yaxes(title_text="$", row=1, col=1)
     fig.update_yaxes(title_text="%", row=2, col=1, autorange="reversed")
     return fig
 
 
-def plot_predictions_with_trades(res):
-    dates = pd.to_datetime(res["dates"])
-    pred = res["predicted_returns"]
-    actual = res["actual_returns"]
-    trades = res["result"].trades
-
+def plot_predictions_dual(res_base, res_news):
+    """Actual return + base prediction + news prediction (same timeline)."""
+    dates = pd.to_datetime(res_base["dates"])
     fig = go.Figure()
     fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=actual,
-            mode="lines",
-            name="Actual log return",
-            line=dict(color="#94a3b8", width=1),
-            opacity=0.7,
-        )
+        go.Scatter(x=dates, y=res_base["actual_returns"],
+                   mode="lines", name="Actual log return",
+                   line=dict(color="#64748b", width=1), opacity=0.55)
     )
     fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=pred,
-            mode="lines",
-            name="Predicted log return",
-            line=dict(color=COLOR_STRATEGY, width=2),
-        )
+        go.Scatter(x=dates, y=res_base["predicted_returns"],
+                   mode="lines", name="Base prediction",
+                   line=dict(color=COLOR_BASE, width=2))
     )
-    fig.add_hline(y=res["entry_thr"], line=dict(color=COLOR_BUY, dash="dot"),
-                  annotation_text=f"entry {res['entry_thr']:+.4f}")
-    fig.add_hline(y=res["exit_thr"], line=dict(color=COLOR_SELL, dash="dot"),
-                  annotation_text=f"exit {res['exit_thr']:+.4f}")
-
-    if trades:
-        buys = [(t.date_idx, t.price) for t in trades if t.side == "buy"]
-        sells = [(t.date_idx, t.price) for t in trades if t.side == "sell"]
-        if buys:
-            idxs, _ = zip(*buys)
-            fig.add_trace(
-                go.Scatter(
-                    x=dates[list(idxs)],
-                    y=pred[list(idxs)],
-                    mode="markers",
-                    name="Buy",
-                    marker=dict(color=COLOR_BUY, size=10, symbol="triangle-up"),
-                )
-            )
-        if sells:
-            idxs, _ = zip(*sells)
-            fig.add_trace(
-                go.Scatter(
-                    x=dates[list(idxs)],
-                    y=pred[list(idxs)],
-                    mode="markers",
-                    name="Sell",
-                    marker=dict(color=COLOR_SELL, size=10, symbol="triangle-down"),
-                )
-            )
-
+    fig.add_trace(
+        go.Scatter(x=dates, y=res_news["predicted_returns"],
+                   mode="lines", name="News prediction",
+                   line=dict(color=COLOR_NEWS, width=2))
+    )
     fig.update_layout(
-        height=380,
-        margin=dict(l=10, r=10, t=40, b=10),
-        title="Predictions vs actual log return (test period)",
+        height=360, margin=dict(l=10, r=10, t=40, b=10),
+        title="Next-day predictions vs actual log return",
         template="plotly_dark",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     )
@@ -509,40 +464,6 @@ def load_sentiment_table():
     return load_daily_sentiment(config=load_config())
 
 
-def plot_equity_comparison(res_base, res_news):
-    """Overlay the two strategies' equity curves plus buy & hold."""
-    dates = pd.to_datetime(res_base["dates"])
-    prices = res_base["prices"]
-    eq_base = res_base["result"].equity_curve
-    eq_news = res_news["result"].equity_curve
-    initial = eq_base[0] if len(eq_base) else 0
-    bh = (initial / prices[0]) * prices if len(prices) else None
-
-    fig = go.Figure()
-    if bh is not None:
-        fig.add_trace(
-            go.Scatter(x=dates, y=bh, name="Buy & hold",
-                       line=dict(color=COLOR_BH, width=2, dash="dot"))
-        )
-    fig.add_trace(
-        go.Scatter(x=dates, y=eq_base, name="Base (technical only)",
-                   line=dict(color="#94a3b8", width=2.5))
-    )
-    fig.add_trace(
-        go.Scatter(x=dates, y=eq_news, name="News (technical + sentiment)",
-                   line=dict(color=COLOR_STRATEGY, width=2.5))
-    )
-    fig.update_layout(
-        height=460,
-        margin=dict(l=10, r=10, t=40, b=10),
-        title="Portfolio value: base vs news model",
-        template="plotly_dark",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-    )
-    fig.update_yaxes(title_text="$")
-    return fig
-
-
 def plot_price_with_sentiment(res):
     """Price line with daily sentiment bars underneath (news variant)."""
     dates = pd.to_datetime(res["dates"])
@@ -577,49 +498,42 @@ def plot_price_with_sentiment(res):
 model, config, model_info = load_model_and_config()
 raw_df = load_market_data()
 sim_defaults = load_sim_defaults()
+news_model = load_news_model()
+sentiment_df = load_sentiment_table() if news_model is not None else None
 
 available_tickers = sorted(raw_df["symbol"].unique())
 training_tickers = set(config.data.tickers)
 training_list = sorted([t for t in available_tickers if t in training_tickers])
 unseen_list = sorted([t for t in available_tickers if t not in training_tickers])
+news_syms = set(sentiment_df["symbol"].unique()) if sentiment_df is not None else set()
 
-
-MODE_BASE = "Base model (2015-2020)"
-MODE_NEWS = "News: base vs sentiment (2015-2020)"
 
 with st.sidebar:
     st.title("⚙️  Controls")
 
-    mode = st.radio("Mode", options=[MODE_BASE, MODE_NEWS], index=0)
-    st.markdown("---")
-
-    if mode == MODE_BASE:
-        st.markdown("**Ticker**")
-        group = st.radio(
-            "Source",
-            options=["Training", "Unseen", "All"],
-            index=1,
-            horizontal=True,
-        )
-        if group == "Training":
-            ticker_options = training_list
-        elif group == "Unseen":
-            ticker_options = unseen_list
-        else:
-            ticker_options = available_tickers
+    st.markdown("**Ticker**")
+    group = st.radio(
+        "Source",
+        options=["Training", "Unseen", "All"],
+        index=0,
+        horizontal=True,
+    )
+    if group == "Training":
+        ticker_options = training_list
+    elif group == "Unseen":
+        ticker_options = unseen_list
     else:
-        sent_tbl = load_sentiment_table()
-        news_syms = set(sent_tbl["symbol"].unique())
-        ticker_options = sorted([t for t in available_tickers if t in news_syms])
+        ticker_options = available_tickers
 
     if ticker_options:
-        if mode == MODE_NEWS and "NFLX" in ticker_options:
-            default_idx = ticker_options.index("NFLX")
-        elif "AAPL" in ticker_options:
-            default_idx = ticker_options.index("AAPL")
-        else:
-            default_idx = 0
-        ticker = st.selectbox("Ticker", options=ticker_options, index=default_idx)
+        preferred = next((t for t in ("NFLX", "AAPL") if t in ticker_options), ticker_options[0])
+        default_idx = ticker_options.index(preferred)
+        ticker = st.selectbox(
+            "Ticker",
+            options=ticker_options,
+            index=default_idx,
+            format_func=lambda t: f"{t}  📰" if t in news_syms else t,
+        )
     else:
         ticker = None
 
@@ -663,120 +577,26 @@ with st.sidebar:
 risk_free = float(sim_defaults.get("risk_free_rate_annual", 0.03))
 
 
-def render_base_mode():
-    st.title("📈  Stock Forecasting — Base model")
-    st.markdown(
-        "<div class='small-note'>Transformer baseline on technical indicators. "
-        "Predicts next-day log return; a band rule turns predictions into trading signals.</div>",
-        unsafe_allow_html=True,
+st.title("📈  Stock Forecasting — base vs news model")
+st.markdown(
+    "<div class='small-note'>The same Transformer trained on 2015-2020, compared with and without "
+    "6 FinBERT daily-sentiment features. Each run backtests <b>both models on the same ticker and "
+    "period</b> against Buy &amp; Hold.</div>",
+    unsafe_allow_html=True,
+)
+st.markdown("---")
+
+
+if news_model is None:
+    st.warning(
+        "News-enhanced model not found. Build it first:\n\n"
+        "1. `py -3.11 scripts/fetch_fnspid_news.py`\n"
+        "2. `py -3.11 scripts/score_news_finbert.py`\n"
+        "3. `py -3.11 scripts/train_news.py`  (creates `best_model_news.pt`)"
     )
-    st.markdown("---")
-
-    if "last_result" not in st.session_state:
-        st.session_state["last_result"] = None
-
-    placeholder_status = st.empty()
-
-    if run and ticker is not None:
-        try:
-            with st.spinner(f"Backtesting {ticker}..."):
-                res = run_backtest_for_ticker(
-                    ticker=ticker,
-                    raw_df=raw_df,
-                    model=model,
-                    config=config,
-                    entry_quantile=entry_quantile,
-                    exit_quantile=exit_quantile,
-                    initial_capital=initial_capital,
-                    position_size_pct=position_size_pct,
-                    commission_pct=commission_pct,
-                    risk_free_rate_annual=risk_free,
-                )
-            st.session_state["last_result"] = res
-        except Exception as e:
-            placeholder_status.error(f"Error for {ticker}: {e}")
-            st.session_state["last_result"] = None
-
-    res = st.session_state["last_result"]
-    if res is None:
-        st.info("Pick a ticker from the left panel and press **Run backtest**.")
-        return
-
-    m = res["metrics"]
-    origin = "training" if res["in_training_set"] else "unseen"
-    st.subheader(f"{res['ticker']} ({origin})")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Strategy return", f"{m.total_return_pct:+.2f}%")
-    c2.metric(
-        "Buy & hold",
-        f"{m.buy_and_hold_return_pct:+.2f}%"
-        if m.buy_and_hold_return_pct is not None
-        else "-",
-    )
-    c3.metric(
-        "Excess vs B&H",
-        f"{m.excess_return_vs_bh_pct:+.2f}%"
-        if m.excess_return_vs_bh_pct is not None
-        else "-",
-        delta=f"{m.excess_return_vs_bh_pct:+.2f}%"
-        if m.excess_return_vs_bh_pct is not None
-        else None,
-    )
-    c4.metric("Sharpe (ann.)", f"{m.sharpe_ratio_annual:.3f}")
-
-    c5, c6, c7, c8 = st.columns(4)
-    c5.metric("Max drawdown", f"{m.max_drawdown_pct:.2f}%")
-    c6.metric("Trades", f"{m.num_trades}")
-    c7.metric("Buy signal freq.", f"{res['buy_signal_pct']:.1f}%")
-    c8.metric("Directional acc.", f"{res['directional_acc_pct']:.1f}%")
-
-    st.plotly_chart(plot_equity_and_drawdown(res), use_container_width=True)
-    st.plotly_chart(plot_predictions_with_trades(res), use_container_width=True)
-
-    with st.expander("Trade log"):
-        df_trades = trades_dataframe(res)
-        if df_trades.empty:
-            st.write("No trades in this period.")
-        else:
-            st.dataframe(df_trades, use_container_width=True, height=320)
-
-    val_loss_str = (
-        f"{model_info['val_loss']:.6f}"
-        if model_info["val_loss"] is not None
-        else "n/a"
-    )
-    st.caption(
-        f"Test window: {len(res['prices'])} days. "
-        f"Entry threshold: {res['entry_thr']:+.5f}, exit threshold: {res['exit_thr']:+.5f}. "
-        f"Model: {model_info['checkpoint']} (val_loss={val_loss_str})."
-    )
-
-
-def render_news_mode():
-    st.title("📰  News experiment — same model, with vs without sentiment")
-    st.markdown(
-        "<div class='small-note'>The same main model on 2015-2020 data, compared with and without "
-        "6 FinBERT daily-sentiment features. Identical architecture, period and split &mdash; the only "
-        "difference is the news input. This is a direct apples-to-apples comparison.</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("---")
-
-    news_model = load_news_model()
-    if news_model is None:
-        st.warning(
-            "News-enhanced model not found. Build it first:\n\n"
-            "1. `py -3.11 scripts/fetch_fnspid_news.py`\n"
-            "2. `py -3.11 scripts/score_news_finbert.py`\n"
-            "3. `py -3.11 scripts/train_news.py`  (creates `best_model_news.pt`)"
-        )
-        return
-
-    sentiment_df = load_sentiment_table()
-
-    if "last_news_result" not in st.session_state:
-        st.session_state["last_news_result"] = None
+else:
+    if "last_pair" not in st.session_state:
+        st.session_state["last_pair"] = None
 
     placeholder_status = st.empty()
 
@@ -797,66 +617,98 @@ def render_news_mode():
                     commission_pct=commission_pct, risk_free_rate_annual=risk_free,
                     sentiment_df=sentiment_df,
                 )
-            st.session_state["last_news_result"] = (res_base, res_news)
+            st.session_state["last_pair"] = (res_base, res_news)
         except Exception as e:
             placeholder_status.error(f"Error for {ticker}: {e}")
-            st.session_state["last_news_result"] = None
+            st.session_state["last_pair"] = None
 
-    pair = st.session_state["last_news_result"]
+    pair = st.session_state["last_pair"]
     if pair is None:
         st.info("Pick a ticker from the left panel and press **Run backtest**.")
-        return
-
-    res_base, res_news = pair
-    mb, mn = res_base["metrics"], res_news["metrics"]
-    news_days = int(np.sum(res_news["sentiment"] != 0)) if res_news["sentiment"] is not None else 0
-    st.subheader(
-        f"{res_base['ticker']}  (test window: {len(res_base['prices'])} days, "
-        f"{news_days} with news)"
-    )
-
-    col_base, col_news = st.columns(2)
-    with col_base:
-        st.markdown("#### Base (technical only)")
-        st.metric("Strategy return", f"{mb.total_return_pct:+.2f}%")
-        st.metric("Sharpe (ann.)", f"{mb.sharpe_ratio_annual:.3f}")
-        st.metric("Directional acc.", f"{res_base['directional_acc_pct']:.1f}%")
-        st.metric("Trades", f"{mb.num_trades}")
-    with col_news:
-        st.markdown("#### News (technical + sentiment)")
-        st.metric(
-            "Strategy return",
-            f"{mn.total_return_pct:+.2f}%",
-            delta=f"{mn.total_return_pct - mb.total_return_pct:+.2f} pp",
+    else:
+        res_base, res_news = pair
+        mb, mn = res_base["metrics"], res_news["metrics"]
+        news_days = (
+            int(np.sum(res_news["sentiment"] != 0)) if res_news["sentiment"] is not None else 0
         )
-        st.metric(
+        origin = "training" if res_base["in_training_set"] else "unseen"
+        news_tag = (
+            f", {news_days} days with news"
+            if ticker in news_syms
+            else " — no news for this ticker"
+        )
+        st.subheader(
+            f"{res_base['ticker']} ({origin}) — test window: "
+            f"{len(res_base['prices'])} days{news_tag}"
+        )
+
+        bh = mb.buy_and_hold_return_pct
+        c1, c2, c3 = st.columns(3)
+        c1.markdown("#### 🟠 Buy & hold")
+        c1.metric("Return", f"{bh:+.2f}%" if bh is not None else "-")
+        c1.metric("Trades", "—")
+        c1.metric("Sharpe (ann.)", "—")
+        c1.metric("Directional acc.", "—")
+
+        c2.markdown("#### ⚪ Base (technical)")
+        c2.metric(
+            "Return",
+            f"{mb.total_return_pct:+.2f}%",
+            delta=f"{mb.total_return_pct - (bh or 0):+.2f} pp vs B&H" if bh is not None else None,
+        )
+        c2.metric("Trades", f"{mb.num_trades}")
+        c2.metric("Sharpe (ann.)", f"{mb.sharpe_ratio_annual:.3f}")
+        c2.metric("Directional acc.", f"{res_base['directional_acc_pct']:.1f}%")
+
+        c3.markdown("#### 🔵 News (+ sentiment)")
+        c3.metric(
+            "Return",
+            f"{mn.total_return_pct:+.2f}%",
+            delta=f"{mn.total_return_pct - mb.total_return_pct:+.2f} pp vs Base",
+        )
+        c3.metric("Trades", f"{mn.num_trades}", delta=f"{mn.num_trades - mb.num_trades:+d}")
+        c3.metric(
             "Sharpe (ann.)",
             f"{mn.sharpe_ratio_annual:.3f}",
             delta=f"{mn.sharpe_ratio_annual - mb.sharpe_ratio_annual:+.3f}",
         )
-        st.metric(
+        c3.metric(
             "Directional acc.",
             f"{res_news['directional_acc_pct']:.1f}%",
             delta=f"{res_news['directional_acc_pct'] - res_base['directional_acc_pct']:+.1f} pp",
         )
-        st.metric("Trades", f"{mn.num_trades}")
 
-    bh = mb.buy_and_hold_return_pct
-    st.caption(f"Buy & hold over the same window: {bh:+.2f}%" if bh is not None else "")
+        st.plotly_chart(plot_equity_and_drawdown(res_base, res_news), use_container_width=True)
+        st.plotly_chart(plot_predictions_dual(res_base, res_news), use_container_width=True)
 
-    st.plotly_chart(plot_equity_comparison(res_base, res_news), use_container_width=True)
-    st.plotly_chart(plot_price_with_sentiment(res_news), use_container_width=True)
+        if news_days > 0:
+            st.plotly_chart(plot_price_with_sentiment(res_news), use_container_width=True)
 
-    base_vl = f"{model_info['val_loss']:.6f}" if model_info["val_loss"] is not None else "n/a"
-    news_vl = f"{news_model['val_loss']:.6f}" if news_model["val_loss"] is not None else "n/a"
-    st.caption(
-        f"Models: best_model_base.pt (val_loss={base_vl}, {model_info['input_dim']} feat) vs "
-        f"best_model_news.pt (val_loss={news_vl}, {news_model['input_dim']} feat). "
-        f"Context window: {config.data.context_length} days."
-    )
+        with st.expander("Trade logs"):
+            tab_base, tab_news = st.tabs(["Base", "News"])
+            with tab_base:
+                df_b = trades_dataframe(res_base)
+                if df_b.empty:
+                    st.write("No trades.")
+                else:
+                    st.dataframe(df_b, use_container_width=True, height=320)
+            with tab_news:
+                df_n = trades_dataframe(res_news)
+                if df_n.empty:
+                    st.write("No trades.")
+                else:
+                    st.dataframe(df_n, use_container_width=True, height=320)
 
-
-if mode == MODE_BASE:
-    render_base_mode()
-else:
-    render_news_mode()
+        base_vl = (
+            f"{model_info['val_loss']:.6f}" if model_info["val_loss"] is not None else "n/a"
+        )
+        news_vl = (
+            f"{news_model['val_loss']:.6f}" if news_model["val_loss"] is not None else "n/a"
+        )
+        st.caption(
+            f"Models: best_model_base.pt (val_loss={base_vl}, {model_info['input_dim']} feat) vs "
+            f"best_model_news.pt (val_loss={news_vl}, {news_model['input_dim']} feat). "
+            f"Context window: {config.data.context_length} days. "
+            f"Base entry/exit: {res_base['entry_thr']:+.5f}/{res_base['exit_thr']:+.5f}. "
+            f"News entry/exit: {res_news['entry_thr']:+.5f}/{res_news['exit_thr']:+.5f}."
+        )
