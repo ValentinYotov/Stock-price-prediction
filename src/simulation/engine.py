@@ -532,3 +532,218 @@ class BacktestEngine:
             entry_thresholds=entry_thr_curve,
             exit_thresholds=exit_thr_curve,
         )
+
+    def run_smart_long_only(
+        self,
+        prices: np.ndarray,
+        predicted_returns: np.ndarray,
+        dates: Optional[np.ndarray] = None,
+        smoothing_span: int = 5,
+        vol_window: int = 20,
+        regime_window: int = 60,
+        entry_z_quantile: float = 0.80,
+        exit_z_quantile: float = 0.30,
+        confirmation_days: int = 2,
+        trailing_stop_pct: float = 5.0,
+        take_profit_pct: float = 10.0,
+        max_hold_days: int = 20,
+        cooldown_days: int = 2,
+    ) -> BacktestResult:
+        """
+        Opinionated long-only strategy designed to be selective and robust:
+
+        1. EMA-smooth the model predictions (span=smoothing_span) to suppress
+           single-day noise.
+        2. Convert the smoothed prediction into a *risk-adjusted z-score* by
+           dividing by the trailing realised return volatility over the last
+           ``vol_window`` days. This expresses the model's edge in units of
+           risk rather than raw return.
+        3. Calibrate entry/exit thresholds adaptively from the *past* z-score
+           distribution of this very model (walk-forward, no look-ahead).
+           This makes the strategy model-agnostic: it trades equally well
+           on a high-variance or a low-variance forecaster, because the bar
+           is set relative to that model's own signal distribution.
+        4. Entry (only when in cash) requires ALL of:
+             a. z-score >= past ``entry_z_quantile`` for ``confirmation_days``
+                consecutive days (sustained edge, not a single spike).
+             b. trailing realised vol is not in a stress regime
+                (current vol < 1.5x its median over the last ``regime_window`` days).
+             c. ``cooldown_days`` have elapsed since the last sell.
+        5. While long, exit at the close of day t on the FIRST of:
+             - Trailing stop: price drops trailing_stop_pct from the post-entry peak.
+             - Take profit: price is up take_profit_pct from the entry price.
+             - Signal exit: z-score drops below the past ``exit_z_quantile``.
+             - Time stop: held for ``max_hold_days`` already.
+
+        All calculations are causal — only past prices and predictions are used.
+        ``entry_thresholds`` and ``exit_thresholds`` in the result hold the
+        per-day z-score quantile thresholds for diagnostic plots.
+        """
+        prices = np.asarray(prices, dtype=float).ravel()
+        predicted_returns = np.asarray(predicted_returns, dtype=float).ravel()
+        n = len(prices)
+        if len(predicted_returns) != n:
+            raise ValueError("prices and predicted_returns must have the same length")
+        if n == 0:
+            raise ValueError("prices must not be empty")
+        if not 0.0 < exit_z_quantile < entry_z_quantile < 1.0:
+            raise ValueError("require 0 < exit_z_quantile < entry_z_quantile < 1")
+
+        smoothing_span = max(1, int(smoothing_span))
+        vol_window = max(5, int(vol_window))
+        regime_window = max(vol_window, int(regime_window))
+        confirmation_days = max(1, int(confirmation_days))
+        cooldown_days = max(0, int(cooldown_days))
+        max_hold_days = max(1, int(max_hold_days))
+
+        if smoothing_span > 1:
+            alpha = 2.0 / (smoothing_span + 1.0)
+            smoothed = np.empty_like(predicted_returns)
+            smoothed[0] = predicted_returns[0]
+            for j in range(1, n):
+                smoothed[j] = alpha * predicted_returns[j] + (1.0 - alpha) * smoothed[j - 1]
+        else:
+            smoothed = predicted_returns.copy()
+
+        realized = np.zeros(n)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            realized[1:] = np.log(np.where(prices[:-1] > 0, prices[1:] / prices[:-1], 1.0))
+        realized = np.nan_to_num(realized, nan=0.0, posinf=0.0, neginf=0.0)
+
+        warmup = max(vol_window, regime_window)
+        if dates is None:
+            dates = np.arange(n)
+        dates = np.asarray(dates)
+
+        cash = float(self.initial_capital)
+        shares = 0.0
+        equity_curve = np.zeros(n)
+        entry_thr_curve = np.full(n, np.nan)
+        exit_thr_curve = np.full(n, np.nan)
+        trades: List[Trade] = []
+        z_history: List[float] = []
+
+        consec_above = 0
+        last_sell_idx = -10_000
+        entry_price: Optional[float] = None
+        entry_idx: Optional[int] = None
+        peak_price: Optional[float] = None
+
+        for i in range(n):
+            price = float(prices[i])
+            is_long = shares > 1e-9
+            is_cash = abs(shares) < 1e-9
+
+            past_vol = float(np.std(realized[max(0, i - vol_window):i], ddof=0)) if i > 0 else 0.0
+            past_vol = past_vol if past_vol > 1e-6 else 1e-6
+            z_score = float(smoothed[i]) / past_vol
+            z_history.append(z_score)
+
+            if i < warmup:
+                equity_curve[i] = cash + shares * price
+                consec_above = 0
+                continue
+
+            past_z = np.asarray(z_history[:-1], dtype=float)
+            if len(past_z) < vol_window:
+                equity_curve[i] = cash + shares * price
+                consec_above = 0
+                continue
+
+            entry_z_thr = float(np.quantile(past_z, entry_z_quantile))
+            exit_z_thr = float(np.quantile(past_z, exit_z_quantile))
+            entry_thr_curve[i] = entry_z_thr
+            exit_thr_curve[i] = exit_z_thr
+
+            if z_score >= entry_z_thr:
+                consec_above += 1
+            else:
+                consec_above = 0
+
+            signal = "hold"
+            if is_long:
+                if entry_price is not None and peak_price is not None and entry_idx is not None:
+                    peak_price = max(peak_price, price)
+                    drop_from_peak_pct = 100.0 * (price - peak_price) / peak_price
+                    gain_from_entry_pct = 100.0 * (price - entry_price) / entry_price
+                    held_days = i - entry_idx
+
+                    if drop_from_peak_pct <= -trailing_stop_pct:
+                        signal = "sell"
+                    elif gain_from_entry_pct >= take_profit_pct:
+                        signal = "sell"
+                    elif z_score <= exit_z_thr:
+                        signal = "sell"
+                    elif held_days >= max_hold_days:
+                        signal = "sell"
+
+            elif is_cash:
+                regime_slice = realized[max(0, i - regime_window):i]
+                median_vol = float(np.median(np.abs(regime_slice))) if len(regime_slice) else 0.0
+                stress = median_vol > 1e-6 and past_vol > 1.5 * median_vol
+                cooled_down = (i - last_sell_idx) >= cooldown_days
+                if (
+                    consec_above >= confirmation_days
+                    and not stress
+                    and cooled_down
+                ):
+                    signal = "buy"
+
+            if signal == "buy" and price > 1e-9 and is_cash:
+                amount = cash * self.position_size_pct
+                commission = amount * (self.commission_pct / 100.0)
+                cost = amount - commission
+                qty = cost / price
+                if qty > 0:
+                    cash -= amount
+                    shares = qty
+                    entry_price = price
+                    entry_idx = i
+                    peak_price = price
+                    consec_above = 0
+                    trades.append(
+                        Trade(
+                            date_idx=i,
+                            date=dates[i] if i < len(dates) else i,
+                            side="buy",
+                            price=price,
+                            quantity=qty,
+                            commission=commission,
+                            cash_after=cash,
+                            shares_after=shares,
+                        )
+                    )
+            elif signal == "sell" and price > 1e-9 and is_long:
+                gross = shares * price
+                commission = gross * (self.commission_pct / 100.0)
+                cash += gross - commission
+                qty = shares
+                shares = 0.0
+                entry_price = None
+                entry_idx = None
+                peak_price = None
+                last_sell_idx = i
+                trades.append(
+                    Trade(
+                        date_idx=i,
+                        date=dates[i] if i < len(dates) else i,
+                        side="sell",
+                        price=price,
+                        quantity=qty,
+                        commission=commission,
+                        cash_after=cash,
+                        shares_after=0.0,
+                    )
+                )
+
+            equity_curve[i] = cash + shares * price
+
+        return BacktestResult(
+            equity_curve=equity_curve,
+            trades=trades,
+            final_cash=cash,
+            final_shares=shares,
+            dates=dates,
+            entry_thresholds=entry_thr_curve,
+            exit_thresholds=exit_thr_curve,
+        )

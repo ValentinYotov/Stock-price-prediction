@@ -184,16 +184,11 @@ def run_backtest_for_ticker(
     raw_df: pd.DataFrame,
     model: StockTransformer,
     config,
-    entry_quantile: float,
-    exit_quantile: float,
     initial_capital: float,
     position_size_pct: float,
     commission_pct: float,
     risk_free_rate_annual: float,
     sentiment_df: pd.DataFrame | None = None,
-    warmup: int = 60,
-    smoothing_window: int = 1,
-    confirmation_days: int = 1,
     start_date=None,
     end_date=None,
 ):
@@ -265,10 +260,10 @@ def run_backtest_for_ticker(
         lo = pd.Timestamp(start_date) if start_date is not None else dates_dt.min()
         hi = pd.Timestamp(end_date) if end_date is not None else dates_dt.max()
         mask = np.asarray((dates_dt >= lo) & (dates_dt <= hi))
-        if int(mask.sum()) < warmup + 10:
+        if int(mask.sum()) < 80:
             raise ValueError(
                 f"Selected window has only {int(mask.sum())} trading days; "
-                f"need at least {warmup + 10} (warmup={warmup} + a few days to trade)."
+                "need at least 80 (volatility window + a few days to trade)."
             )
         prices = prices[mask]
         dates = dates[mask]
@@ -282,15 +277,10 @@ def run_backtest_for_ticker(
         position_size_pct=position_size_pct,
         commission_pct=commission_pct,
     )
-    result = engine.run_band_walk_forward(
+    result = engine.run_smart_long_only(
         prices=prices,
         predicted_returns=predicted_returns,
         dates=dates,
-        entry_quantile=entry_quantile,
-        exit_quantile=exit_quantile,
-        warmup=warmup,
-        smoothing_window=smoothing_window,
-        confirmation_days=confirmation_days,
     )
     metrics = compute_metrics(
         result,
@@ -299,20 +289,8 @@ def run_backtest_for_ticker(
         prices=prices,
     )
 
-    final_entry_thr = float(np.nanmean(result.entry_thresholds[warmup:])) if result.entry_thresholds is not None else float("nan")
-    final_exit_thr = float(np.nanmean(result.exit_thresholds[warmup:])) if result.exit_thresholds is not None else float("nan")
-
-    decision_signals = [
-        signal_from_return_band(
-            float(p),
-            False,
-            float(result.entry_thresholds[i]) if result.entry_thresholds is not None and not np.isnan(result.entry_thresholds[i]) else np.inf,
-            float(result.exit_thresholds[i]) if result.exit_thresholds is not None and not np.isnan(result.exit_thresholds[i]) else -np.inf,
-        )
-        for i, p in enumerate(predicted_returns)
-    ]
-    buy_signals = sum(1 for s in decision_signals if s == "buy")
     directional_acc = float(np.mean(np.sign(predicted_returns) == np.sign(actual_returns)))
+    buy_signals = sum(1 for t in result.trades if t.side == "buy")
 
     return {
         "ticker": ticker,
@@ -323,11 +301,8 @@ def run_backtest_for_ticker(
         "predicted_returns": predicted_returns,
         "actual_returns": actual_returns,
         "sentiment": sentiment_series,
-        "entry_thr": final_entry_thr,
-        "exit_thr": final_exit_thr,
         "entry_thr_curve": result.entry_thresholds,
         "exit_thr_curve": result.exit_thresholds,
-        "warmup": warmup,
         "buy_signal_pct": 100 * buy_signals / len(prices),
         "directional_acc_pct": 100 * directional_acc,
         "in_training_set": ticker in set(config.data.tickers),
@@ -606,34 +581,6 @@ with st.sidebar:
         st.warning(f"Not enough data for {ticker}.")
 
     st.markdown("---")
-    st.markdown("**Strategy (causal band thresholds)**")
-    st.caption(
-        "Thresholds are recomputed each day from past predictions only "
-        "(walk-forward, no look-ahead). EMA smoothing reduces single-day noise "
-        "and confirmation days demand consistency before entering or exiting."
-    )
-    entry_quantile = st.slider(
-        "Entry quantile", min_value=0.50, max_value=0.95, value=0.70, step=0.05,
-        help="Buy when the smoothed prediction is above this percentile of past predictions.",
-    )
-    exit_quantile = st.slider(
-        "Exit quantile", min_value=0.05, max_value=0.50, value=0.30, step=0.05,
-        help="Sell when the smoothed prediction falls below this percentile.",
-    )
-    smoothing_window = st.slider(
-        "EMA smoothing (days)", min_value=1, max_value=15, value=5, step=1,
-        help="Span of the exponential moving average applied to predictions. 1 = raw, no smoothing.",
-    )
-    confirmation_days = st.slider(
-        "Confirmation days", min_value=1, max_value=5, value=2, step=1,
-        help="Required number of consecutive days with a sustained signal before acting.",
-    )
-    warmup = st.slider(
-        "Warmup days (no trading)", min_value=20, max_value=200, value=60, step=10,
-        help="Initial observation-only days needed for the per-ticker quantile to stabilise.",
-    )
-
-    st.markdown("---")
     st.markdown("**Portfolio**")
     initial_capital = st.number_input(
         "Initial capital ($)",
@@ -648,6 +595,7 @@ with st.sidebar:
         max_value=1.0,
         value=float(sim_defaults.get("position_size_pct", 0.3)),
         step=0.05,
+        help="Fraction of available cash committed on each buy.",
     )
     commission_pct = st.slider(
         "Commission %",
@@ -655,6 +603,7 @@ with st.sidebar:
         max_value=1.0,
         value=float(sim_defaults.get("commission_pct", 0.1)),
         step=0.05,
+        help="Round-trip commission per trade (industry typical: 0.05% - 0.20%).",
     )
 
     st.markdown("---")
@@ -676,6 +625,31 @@ st.markdown(
     "period</b> against Buy &amp; Hold.</div>",
     unsafe_allow_html=True,
 )
+
+with st.expander("How the trading strategy decides — click to expand", expanded=False):
+    st.markdown(
+        """
+**Smart long-only strategy** (fixed, opinionated — no parameter tuning by hand).
+
+Every day the system:
+
+1. **Smooths the model prediction** with a 5-day exponential moving average to filter single-day noise.
+2. **Converts it to a risk-adjusted z-score** by dividing by the trailing 20-day realised volatility — the model's edge is measured *in units of risk*, not raw return.
+3. **Calibrates entry/exit thresholds adaptively** from each model's *own* past z-score distribution (walk-forward, no look-ahead). This way the strategy works for both base and news models even though their predictions live on different scales.
+4. **Enters a long position** only when *all three* hold:
+    - the z-score has been **above its top 20% threshold** for **2 consecutive days** (sustained edge, not a spike),
+    - the market is **not in a stress regime** (current volatility < 1.5× the median over the last 60 days),
+    - at least **2 days have passed** since the last sell (cooldown to avoid whipsaws).
+5. **Exits** on the *first* of:
+    - **Trailing stop** — price drops 5% from the post-entry peak,
+    - **Take profit** — price is up 10% from the entry price,
+    - **Signal exit** — the z-score drops below its bottom 30% threshold (model turns bearish for itself),
+    - **Time stop** — held for 20 trading days.
+
+All calculations are **causal**: only past prices and predictions are used.
+        """
+    )
+
 st.markdown("---")
 
 
@@ -697,22 +671,16 @@ else:
             with st.spinner(f"Backtesting {ticker} (base + news)..."):
                 res_base = run_backtest_for_ticker(
                     ticker=ticker, raw_df=raw_df, model=model, config=config,
-                    entry_quantile=entry_quantile, exit_quantile=exit_quantile,
                     initial_capital=initial_capital, position_size_pct=position_size_pct,
                     commission_pct=commission_pct, risk_free_rate_annual=risk_free,
-                    sentiment_df=None, warmup=warmup,
-                    smoothing_window=smoothing_window,
-                    confirmation_days=confirmation_days,
+                    sentiment_df=None,
                     start_date=start_date, end_date=end_date,
                 )
                 res_news = run_backtest_for_ticker(
                     ticker=ticker, raw_df=raw_df, model=news_model["model"], config=config,
-                    entry_quantile=entry_quantile, exit_quantile=exit_quantile,
                     initial_capital=initial_capital, position_size_pct=position_size_pct,
                     commission_pct=commission_pct, risk_free_rate_annual=risk_free,
-                    sentiment_df=sentiment_df, warmup=warmup,
-                    smoothing_window=smoothing_window,
-                    confirmation_days=confirmation_days,
+                    sentiment_df=sentiment_df,
                     start_date=start_date, end_date=end_date,
                 )
             st.session_state["last_pair"] = (res_base, res_news)
@@ -807,7 +775,5 @@ else:
         st.caption(
             f"Models: best_model_base.pt (val_loss={base_vl}, {model_info['input_dim']} feat) vs "
             f"best_model_news.pt (val_loss={news_vl}, {news_model['input_dim']} feat). "
-            f"Context window: {config.data.context_length} days. "
-            f"Base entry/exit: {res_base['entry_thr']:+.5f}/{res_base['exit_thr']:+.5f}. "
-            f"News entry/exit: {res_news['entry_thr']:+.5f}/{res_news['exit_thr']:+.5f}."
+            f"Context window: {config.data.context_length} days."
         )
