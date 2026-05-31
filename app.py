@@ -191,6 +191,11 @@ def run_backtest_for_ticker(
     commission_pct: float,
     risk_free_rate_annual: float,
     sentiment_df: pd.DataFrame | None = None,
+    warmup: int = 60,
+    smoothing_window: int = 1,
+    confirmation_days: int = 1,
+    start_date=None,
+    end_date=None,
 ):
     ticker_df = raw_df[raw_df["symbol"] == ticker]
     if len(ticker_df) < 200:
@@ -255,21 +260,37 @@ def run_backtest_for_ticker(
             pred_batches.append(model(batch_x).detach().cpu())
     predicted_returns = torch.cat(pred_batches).numpy().reshape(-1)
 
-    entry_thr = float(np.quantile(predicted_returns, entry_quantile))
-    exit_thr = float(np.quantile(predicted_returns, exit_quantile))
+    if start_date is not None or end_date is not None:
+        dates_dt = pd.to_datetime(dates)
+        lo = pd.Timestamp(start_date) if start_date is not None else dates_dt.min()
+        hi = pd.Timestamp(end_date) if end_date is not None else dates_dt.max()
+        mask = np.asarray((dates_dt >= lo) & (dates_dt <= hi))
+        if int(mask.sum()) < warmup + 10:
+            raise ValueError(
+                f"Selected window has only {int(mask.sum())} trading days; "
+                f"need at least {warmup + 10} (warmup={warmup} + a few days to trade)."
+            )
+        prices = prices[mask]
+        dates = dates[mask]
+        predicted_returns = predicted_returns[mask]
+        actual_returns = actual_returns[mask]
+        if sentiment_series is not None:
+            sentiment_series = sentiment_series[mask]
 
     engine = BacktestEngine(
         initial_capital=initial_capital,
         position_size_pct=position_size_pct,
         commission_pct=commission_pct,
     )
-    result = engine.run_from_log_returns(
+    result = engine.run_band_walk_forward(
         prices=prices,
         predicted_returns=predicted_returns,
         dates=dates,
-        entry_threshold=entry_thr,
-        exit_threshold=exit_thr,
-        signal_mode="band",
+        entry_quantile=entry_quantile,
+        exit_quantile=exit_quantile,
+        warmup=warmup,
+        smoothing_window=smoothing_window,
+        confirmation_days=confirmation_days,
     )
     metrics = compute_metrics(
         result,
@@ -278,11 +299,19 @@ def run_backtest_for_ticker(
         prices=prices,
     )
 
-    buy_signals = sum(
-        1
-        for p in predicted_returns
-        if signal_from_return_band(p, False, entry_thr, exit_thr) == "buy"
-    )
+    final_entry_thr = float(np.nanmean(result.entry_thresholds[warmup:])) if result.entry_thresholds is not None else float("nan")
+    final_exit_thr = float(np.nanmean(result.exit_thresholds[warmup:])) if result.exit_thresholds is not None else float("nan")
+
+    decision_signals = [
+        signal_from_return_band(
+            float(p),
+            False,
+            float(result.entry_thresholds[i]) if result.entry_thresholds is not None and not np.isnan(result.entry_thresholds[i]) else np.inf,
+            float(result.exit_thresholds[i]) if result.exit_thresholds is not None and not np.isnan(result.exit_thresholds[i]) else -np.inf,
+        )
+        for i, p in enumerate(predicted_returns)
+    ]
+    buy_signals = sum(1 for s in decision_signals if s == "buy")
     directional_acc = float(np.mean(np.sign(predicted_returns) == np.sign(actual_returns)))
 
     return {
@@ -294,8 +323,11 @@ def run_backtest_for_ticker(
         "predicted_returns": predicted_returns,
         "actual_returns": actual_returns,
         "sentiment": sentiment_series,
-        "entry_thr": entry_thr,
-        "exit_thr": exit_thr,
+        "entry_thr": final_entry_thr,
+        "exit_thr": final_exit_thr,
+        "entry_thr_curve": result.entry_thresholds,
+        "exit_thr_curve": result.exit_thresholds,
+        "warmup": warmup,
         "buy_signal_pct": 100 * buy_signals / len(prices),
         "directional_acc_pct": 100 * directional_acc,
         "in_training_set": ticker in set(config.data.tickers),
@@ -502,48 +534,103 @@ news_model = load_news_model()
 sentiment_df = load_sentiment_table() if news_model is not None else None
 
 available_tickers = sorted(raw_df["symbol"].unique())
-training_tickers = set(config.data.tickers)
-training_list = sorted([t for t in available_tickers if t in training_tickers])
-unseen_list = sorted([t for t in available_tickers if t not in training_tickers])
 news_syms = set(sentiment_df["symbol"].unique()) if sentiment_df is not None else set()
+
+
+@st.cache_data(show_spinner=False)
+def get_test_window_dates(ticker: str) -> np.ndarray:
+    """Dates that fall inside the model's test window for a ticker.
+
+    Built without news features so that the bounds do not depend on whether
+    the news-enhanced model is used; news only affects the feature vector,
+    not which days are testable.
+    """
+    df = raw_df[raw_df["symbol"] == ticker]
+    if len(df) < 200:
+        return np.array([], dtype="datetime64[ns]")
+    full = build_features(df, config, sentiment_df=None)
+    ctx = config.data.context_length
+    if len(full) < ctx + 50:
+        return np.array([], dtype="datetime64[ns]")
+    n = len(full)
+    test_start = int(n * (config.data.train_split + config.data.val_split))
+    seq_start = max(0, test_start - ctx + 1)
+    seg = full.iloc[seq_start:].reset_index(drop=True)
+    n_seq = len(seg) - ctx - config.data.prediction_horizon + 1
+    if n_seq < 1:
+        return np.array([], dtype="datetime64[ns]")
+    return seg["date"].values[ctx : ctx + n_seq]
 
 
 with st.sidebar:
     st.title("⚙️  Controls")
 
     st.markdown("**Ticker**")
-    group = st.radio(
-        "Source",
-        options=["Training", "Unseen", "All"],
-        index=0,
-        horizontal=True,
+    default_idx = 0
+    for preferred in ("NFLX", "AAPL", "MSFT"):
+        if preferred in available_tickers:
+            default_idx = available_tickers.index(preferred)
+            break
+    ticker = st.selectbox(
+        "Symbol",
+        options=available_tickers,
+        index=default_idx,
+        format_func=lambda t: f"{t}  📰" if t in news_syms else t,
+        label_visibility="collapsed",
+        help="📰 marks tickers that have news sentiment available.",
     )
-    if group == "Training":
-        ticker_options = training_list
-    elif group == "Unseen":
-        ticker_options = unseen_list
-    else:
-        ticker_options = available_tickers
 
-    if ticker_options:
-        preferred = next((t for t in ("NFLX", "AAPL") if t in ticker_options), ticker_options[0])
-        default_idx = ticker_options.index(preferred)
-        ticker = st.selectbox(
-            "Ticker",
-            options=ticker_options,
-            index=default_idx,
-            format_func=lambda t: f"{t}  📰" if t in news_syms else t,
+    ticker_dates = get_test_window_dates(ticker) if ticker else np.array([])
+    if len(ticker_dates) > 0:
+        total_days = len(ticker_dates)
+        period_options = [("Full window", total_days)]
+        for n_days in (200, 150, 100):
+            if n_days < total_days:
+                period_options.append((f"Last {n_days} days", n_days))
+        labels = [lbl for lbl, _ in period_options]
+        chosen_label = st.selectbox(
+            "Period (anchored to most recent test day)",
+            options=labels,
+            index=0,
+        )
+        chosen_n = dict(period_options)[chosen_label]
+        start_date = pd.Timestamp(ticker_dates[-chosen_n]).date()
+        end_date = pd.Timestamp(ticker_dates[-1]).date()
+        st.caption(
+            f"Available: {pd.Timestamp(ticker_dates[0]).date()} → "
+            f"{pd.Timestamp(ticker_dates[-1]).date()} "
+            f"({total_days} trading days). Using {chosen_n}."
         )
     else:
-        ticker = None
+        start_date, end_date = None, None
+        st.warning(f"Not enough data for {ticker}.")
 
     st.markdown("---")
-    st.markdown("**Strategy (band thresholds)**")
+    st.markdown("**Strategy (causal band thresholds)**")
+    st.caption(
+        "Thresholds are recomputed each day from past predictions only "
+        "(walk-forward, no look-ahead). EMA smoothing reduces single-day noise "
+        "and confirmation days demand consistency before entering or exiting."
+    )
     entry_quantile = st.slider(
-        "Entry quantile", min_value=0.50, max_value=0.95, value=0.70, step=0.05
+        "Entry quantile", min_value=0.50, max_value=0.95, value=0.70, step=0.05,
+        help="Buy when the smoothed prediction is above this percentile of past predictions.",
     )
     exit_quantile = st.slider(
-        "Exit quantile", min_value=0.05, max_value=0.50, value=0.30, step=0.05
+        "Exit quantile", min_value=0.05, max_value=0.50, value=0.30, step=0.05,
+        help="Sell when the smoothed prediction falls below this percentile.",
+    )
+    smoothing_window = st.slider(
+        "EMA smoothing (days)", min_value=1, max_value=15, value=5, step=1,
+        help="Span of the exponential moving average applied to predictions. 1 = raw, no smoothing.",
+    )
+    confirmation_days = st.slider(
+        "Confirmation days", min_value=1, max_value=5, value=2, step=1,
+        help="Required number of consecutive days with a sustained signal before acting.",
+    )
+    warmup = st.slider(
+        "Warmup days (no trading)", min_value=20, max_value=200, value=60, step=10,
+        help="Initial observation-only days needed for the per-ticker quantile to stabilise.",
     )
 
     st.markdown("---")
@@ -571,7 +658,12 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    run = st.button("▶  Run backtest", use_container_width=True, type="primary")
+    run = st.button(
+        "▶  Run backtest",
+        use_container_width=True,
+        type="primary",
+        disabled=(ticker is None or start_date is None),
+    )
 
 
 risk_free = float(sim_defaults.get("risk_free_rate_annual", 0.03))
@@ -608,14 +700,20 @@ else:
                     entry_quantile=entry_quantile, exit_quantile=exit_quantile,
                     initial_capital=initial_capital, position_size_pct=position_size_pct,
                     commission_pct=commission_pct, risk_free_rate_annual=risk_free,
-                    sentiment_df=None,
+                    sentiment_df=None, warmup=warmup,
+                    smoothing_window=smoothing_window,
+                    confirmation_days=confirmation_days,
+                    start_date=start_date, end_date=end_date,
                 )
                 res_news = run_backtest_for_ticker(
                     ticker=ticker, raw_df=raw_df, model=news_model["model"], config=config,
                     entry_quantile=entry_quantile, exit_quantile=exit_quantile,
                     initial_capital=initial_capital, position_size_pct=position_size_pct,
                     commission_pct=commission_pct, risk_free_rate_annual=risk_free,
-                    sentiment_df=sentiment_df,
+                    sentiment_df=sentiment_df, warmup=warmup,
+                    smoothing_window=smoothing_window,
+                    confirmation_days=confirmation_days,
+                    start_date=start_date, end_date=end_date,
                 )
             st.session_state["last_pair"] = (res_base, res_news)
         except Exception as e:
@@ -631,15 +729,16 @@ else:
         news_days = (
             int(np.sum(res_news["sentiment"] != 0)) if res_news["sentiment"] is not None else 0
         )
-        origin = "training" if res_base["in_training_set"] else "unseen"
+        window_start = pd.to_datetime(res_base["dates"]).min().date()
+        window_end = pd.to_datetime(res_base["dates"]).max().date()
         news_tag = (
-            f", {news_days} days with news"
+            f" — {news_days} days with news"
             if ticker in news_syms
             else " — no news for this ticker"
         )
         st.subheader(
-            f"{res_base['ticker']} ({origin}) — test window: "
-            f"{len(res_base['prices'])} days{news_tag}"
+            f"{res_base['ticker']}  ·  {window_start} → {window_end}  "
+            f"({len(res_base['prices'])} trading days){news_tag}"
         )
 
         bh = mb.buy_and_hold_return_pct

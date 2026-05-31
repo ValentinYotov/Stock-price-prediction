@@ -36,6 +36,8 @@ class BacktestResult:
     final_cash: float = 0.0
     final_shares: float = 0.0
     dates: Optional[np.ndarray] = None
+    entry_thresholds: Optional[np.ndarray] = None
+    exit_thresholds: Optional[np.ndarray] = None
 
 
 class BacktestEngine:
@@ -378,4 +380,155 @@ class BacktestEngine:
             final_cash=cash,
             final_shares=shares,
             dates=dates,
+        )
+
+    def run_band_walk_forward(
+        self,
+        prices: np.ndarray,
+        predicted_returns: np.ndarray,
+        dates: Optional[np.ndarray] = None,
+        entry_quantile: float = 0.70,
+        exit_quantile: float = 0.30,
+        warmup: int = 60,
+        smoothing_window: int = 1,
+        confirmation_days: int = 1,
+    ) -> BacktestResult:
+        """
+        Long-only band backtest with causal (walk-forward) quantile thresholds.
+
+        At day t the entry/exit thresholds are computed as the requested quantiles
+        of the *smoothed* predictions seen so far, i.e. they depend exclusively
+        on information that would have been available at t. This removes the
+        look-ahead bias of computing quantiles over the full test period.
+
+        During the first ``warmup`` days no trading occurs; we just accumulate
+        predictions so that the quantile estimates are stable. After that:
+        - the raw next-day prediction is replaced by an EMA over the last
+          ``smoothing_window`` days (span = smoothing_window),
+        - we buy only when the smoothed prediction stays above the entry
+          threshold for ``confirmation_days`` consecutive days, and sell when
+          it stays below the exit threshold for the same number of days.
+
+        ``smoothing_window = 1`` and ``confirmation_days = 1`` reproduce the
+        original single-day band behaviour.
+        """
+        prices = np.asarray(prices, dtype=float).ravel()
+        predicted_returns = np.asarray(predicted_returns, dtype=float).ravel()
+        n = len(prices)
+        if len(predicted_returns) != n:
+            raise ValueError("prices and predicted_returns must have the same length")
+        if n == 0:
+            raise ValueError("prices must not be empty")
+        if not 0.0 < exit_quantile < entry_quantile < 1.0:
+            raise ValueError("require 0 < exit_quantile < entry_quantile < 1")
+        warmup = max(1, int(warmup))
+        smoothing_window = max(1, int(smoothing_window))
+        confirmation_days = max(1, int(confirmation_days))
+
+        if smoothing_window > 1:
+            alpha = 2.0 / (smoothing_window + 1.0)
+            smoothed = np.empty_like(predicted_returns)
+            smoothed[0] = predicted_returns[0]
+            for j in range(1, n):
+                smoothed[j] = alpha * predicted_returns[j] + (1.0 - alpha) * smoothed[j - 1]
+        else:
+            smoothed = predicted_returns
+
+        if dates is None:
+            dates = np.arange(n)
+        dates = np.asarray(dates)
+
+        cash = float(self.initial_capital)
+        shares = 0.0
+        equity_curve = np.zeros(n)
+        entry_thr_curve = np.full(n, np.nan)
+        exit_thr_curve = np.full(n, np.nan)
+        trades: List[Trade] = []
+        consec_above = 0
+        consec_below = 0
+
+        for i in range(n):
+            price = float(prices[i])
+            pred_ret = float(smoothed[i])
+            is_long = shares > 1e-9
+            is_cash = abs(shares) < 1e-9
+
+            history = smoothed[: i + 1]
+            if len(history) >= warmup:
+                entry_thr = float(np.quantile(history, entry_quantile))
+                exit_thr = float(np.quantile(history, exit_quantile))
+                entry_thr_curve[i] = entry_thr
+                exit_thr_curve[i] = exit_thr
+
+                if pred_ret >= entry_thr:
+                    consec_above += 1
+                    consec_below = 0
+                elif pred_ret <= exit_thr:
+                    consec_below += 1
+                    consec_above = 0
+                else:
+                    consec_above = 0
+                    consec_below = 0
+
+                if is_cash and consec_above >= confirmation_days:
+                    signal = "buy"
+                elif is_long and consec_below >= confirmation_days:
+                    signal = "sell"
+                else:
+                    signal = "hold"
+            else:
+                signal = "hold"
+                consec_above = 0
+                consec_below = 0
+
+            if signal == "buy" and price > 1e-9 and is_cash:
+                amount = cash * self.position_size_pct
+                commission = amount * (self.commission_pct / 100.0)
+                cost = amount - commission
+                qty = cost / price
+                if qty > 0:
+                    cash -= amount
+                    shares = qty
+                    trades.append(
+                        Trade(
+                            date_idx=i,
+                            date=dates[i] if i < len(dates) else i,
+                            side="buy",
+                            price=price,
+                            quantity=qty,
+                            commission=commission,
+                            cash_after=cash,
+                            shares_after=shares,
+                        )
+                    )
+
+            elif signal == "sell" and price > 1e-9 and is_long:
+                gross = shares * price
+                commission = gross * (self.commission_pct / 100.0)
+                cash += gross - commission
+                qty = shares
+                shares = 0.0
+                trades.append(
+                    Trade(
+                        date_idx=i,
+                        date=dates[i] if i < len(dates) else i,
+                        side="sell",
+                        price=price,
+                        quantity=qty,
+                        commission=commission,
+                        cash_after=cash,
+                        shares_after=0.0,
+                    )
+                )
+
+            equity_curve[i] = cash + shares * price
+
+        return BacktestResult(
+            equity_curve=equity_curve,
+            trades=trades,
+            final_cash=cash,
+            final_shares=shares,
+            dates=dates,
+            entry_thresholds=entry_thr_curve,
+            exit_thresholds=exit_thr_curve,
         )
