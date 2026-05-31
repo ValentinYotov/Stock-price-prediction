@@ -1,14 +1,4 @@
-"""
-Train the news-enhanced variant of the main model.
 
-Identical architecture, data period (2015-2020) and split as the base model,
-the only difference being `use_news=True` (adds the 6 FinBERT sentiment features).
-Saves to models/checkpoints/best_model_news.pt so it can be compared directly
-against best_model_base.pt.
-
-Run:
-    py -3.11 scripts/train_news.py
-"""
 import sys
 from pathlib import Path
 

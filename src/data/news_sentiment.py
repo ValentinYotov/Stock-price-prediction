@@ -1,20 +1,4 @@
-"""
-Daily news sentiment features (FinBERT, 2015-2020).
 
-The sentiment table is produced offline by two scripts:
-    1. scripts/fetch_fnspid_news.py    -> data/news/headlines_2015_2020.parquet
-    2. scripts/score_news_finbert.py   -> data/news/daily_sentiment_2015_2020.parquet
-
-This module just loads that cached table and merges it into the technical
-feature frame as ordinary model inputs (one row per symbol/day).
-
-Schema:
-    symbol, date, news_compound, news_pos, news_neg, news_neu, news_count, news_has
-
-where `news_compound = P(positive) - P(negative)` per article (FinBERT), averaged
-per day. Using same-day sentiment to predict the next-day return introduces no
-look-ahead: a row at day t only uses news published up to day t.
-"""
 from __future__ import annotations
 
 from pathlib import Path

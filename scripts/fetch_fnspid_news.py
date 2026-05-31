@@ -1,14 +1,4 @@
-"""
-Step 1 of the 2015-2020 news pipeline.
 
-Downloads the FNSPID `All_external.csv` (~5.7 GB, cached by huggingface_hub),
-streams it in chunks, and keeps only the rows for the thesis ticker universe
-within 2015-2020. We persist just `symbol, date, headline` so the heavy CSV can
-be deleted afterwards. Sentiment scoring (FinBERT/VADER) happens in step 2.
-
-Run:
-    py -3.11 scripts/fetch_fnspid_news.py
-"""
 from __future__ import annotations
 
 import sys

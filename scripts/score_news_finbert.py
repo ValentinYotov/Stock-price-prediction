@@ -1,18 +1,4 @@
-"""
-Step 2 of the 2015-2020 news pipeline.
 
-Scores the filtered headlines with FinBERT (ProsusAI/finbert), a finance-domain
-transformer, then aggregates to one row per (symbol, date). Output schema matches
-the existing news pipeline so it merges into the technical feature frame unchanged:
-
-    symbol, date, news_compound, news_pos, news_neg, news_neu, news_count, news_has
-
-where news_compound = P(positive) - P(negative) per article (analogous to VADER's
-compound), averaged per day.
-
-Run:
-    py -3.11 scripts/score_news_finbert.py
-"""
 from __future__ import annotations
 
 import sys
