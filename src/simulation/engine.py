@@ -38,6 +38,9 @@ class BacktestResult:
     dates: Optional[np.ndarray] = None
     entry_thresholds: Optional[np.ndarray] = None
     exit_thresholds: Optional[np.ndarray] = None
+    margin_call_count: int = 0
+    account_wiped_at_idx: Optional[int] = None
+    account_wiped_at_date: Optional[Union[str, int]] = None
 
 
 class BacktestEngine:
@@ -538,46 +541,46 @@ class BacktestEngine:
         prices: np.ndarray,
         predicted_returns: np.ndarray,
         dates: Optional[np.ndarray] = None,
-        smoothing_span: int = 5,
+        smoothing_span: int = 3,
         vol_window: int = 20,
-        regime_window: int = 60,
-        entry_z_quantile: float = 0.80,
-        exit_z_quantile: float = 0.30,
-        confirmation_days: int = 2,
-        trailing_stop_pct: float = 5.0,
-        take_profit_pct: float = 10.0,
-        max_hold_days: int = 20,
-        cooldown_days: int = 2,
+        regime_window: int = 30,
+        entry_z_quantile: float = 0.50,
+        exit_z_quantile: float = 0.20,
+        confirmation_days: int = 1,
+        trailing_stop_pct: float = 6.0,
+        take_profit_pct: float = 12.0,
+        max_hold_days: int = 30,
+        cooldown_days: int = 1,
+        stress_vol_multiplier: float = 2.5,
+        leverage: float = 1.0,
     ) -> BacktestResult:
         """
-        Opinionated long-only strategy designed to be selective and robust:
+        Long-biased opinionated strategy. Designed to actually participate
+        in trends instead of waiting for rare "perfect" setups:
 
-        1. EMA-smooth the model predictions (span=smoothing_span) to suppress
-           single-day noise.
-        2. Convert the smoothed prediction into a *risk-adjusted z-score* by
-           dividing by the trailing realised return volatility over the last
-           ``vol_window`` days. This expresses the model's edge in units of
-           risk rather than raw return.
-        3. Calibrate entry/exit thresholds adaptively from the *past* z-score
-           distribution of this very model (walk-forward, no look-ahead).
-           This makes the strategy model-agnostic: it trades equally well
-           on a high-variance or a low-variance forecaster, because the bar
-           is set relative to that model's own signal distribution.
+        1. EMA-smooth the model predictions (span=smoothing_span).
+        2. Convert smoothed prediction into a risk-adjusted z-score via
+           trailing realised return volatility (vol_window days).
+        3. Calibrate entry/exit thresholds adaptively from each model's
+           own past z-score distribution (walk-forward, no look-ahead).
+           This makes the strategy model-agnostic so base and news models
+           are compared on equal footing.
         4. Entry (only when in cash) requires ALL of:
              a. z-score >= past ``entry_z_quantile`` for ``confirmation_days``
-                consecutive days (sustained edge, not a single spike).
-             b. trailing realised vol is not in a stress regime
-                (current vol < 1.5x its median over the last ``regime_window`` days).
+                consecutive days (default: simply above the model's own median).
+             b. realised volatility is not in an extreme stress regime
+                (current vol < stress_vol_multiplier x median over the last
+                ``regime_window`` days). Default 2.5x only filters true
+                black-swan days (e.g. mid-March 2020) rather than ordinary
+                volatility spikes.
              c. ``cooldown_days`` have elapsed since the last sell.
         5. While long, exit at the close of day t on the FIRST of:
-             - Trailing stop: price drops trailing_stop_pct from the post-entry peak.
-             - Take profit: price is up take_profit_pct from the entry price.
-             - Signal exit: z-score drops below the past ``exit_z_quantile``.
+             - Trailing stop: price drops trailing_stop_pct from post-entry peak.
+             - Take profit: price up take_profit_pct from entry.
+             - Signal exit: z-score drops below past ``exit_z_quantile``.
              - Time stop: held for ``max_hold_days`` already.
 
-        All calculations are causal — only past prices and predictions are used.
-        ``entry_thresholds`` and ``exit_thresholds`` in the result hold the
-        per-day z-score quantile thresholds for diagnostic plots.
+        All calculations are causal -- only past prices and predictions used.
         """
         prices = np.asarray(prices, dtype=float).ravel()
         predicted_returns = np.asarray(predicted_returns, dtype=float).ravel()
@@ -595,6 +598,7 @@ class BacktestEngine:
         confirmation_days = max(1, int(confirmation_days))
         cooldown_days = max(0, int(cooldown_days))
         max_hold_days = max(1, int(max_hold_days))
+        leverage = max(1.0, float(leverage))
 
         if smoothing_span > 1:
             alpha = 2.0 / (smoothing_span + 1.0)
@@ -617,6 +621,7 @@ class BacktestEngine:
 
         cash = float(self.initial_capital)
         shares = 0.0
+        borrowed = 0.0
         equity_curve = np.zeros(n)
         entry_thr_curve = np.full(n, np.nan)
         exit_thr_curve = np.full(n, np.nan)
@@ -628,11 +633,24 @@ class BacktestEngine:
         entry_price: Optional[float] = None
         entry_idx: Optional[int] = None
         peak_price: Optional[float] = None
+        margin_call_count = 0
+        account_wiped_idx: Optional[int] = None
+        account_wiped_date: Optional[Union[str, int]] = None
+
+        def total_equity(p: float) -> float:
+            return cash + shares * p - borrowed
+
+        def position_equity(p: float) -> float:
+            return shares * p - borrowed
 
         for i in range(n):
             price = float(prices[i])
             is_long = shares > 1e-9
             is_cash = abs(shares) < 1e-9
+
+            if account_wiped_idx is not None:
+                equity_curve[i] = max(0.0, total_equity(price))
+                continue
 
             past_vol = float(np.std(realized[max(0, i - vol_window):i], ddof=0)) if i > 0 else 0.0
             past_vol = past_vol if past_vol > 1e-6 else 1e-6
@@ -640,13 +658,13 @@ class BacktestEngine:
             z_history.append(z_score)
 
             if i < warmup:
-                equity_curve[i] = cash + shares * price
+                equity_curve[i] = total_equity(price)
                 consec_above = 0
                 continue
 
             past_z = np.asarray(z_history[:-1], dtype=float)
             if len(past_z) < vol_window:
-                equity_curve[i] = cash + shares * price
+                equity_curve[i] = total_equity(price)
                 consec_above = 0
                 continue
 
@@ -680,7 +698,7 @@ class BacktestEngine:
             elif is_cash:
                 regime_slice = realized[max(0, i - regime_window):i]
                 median_vol = float(np.median(np.abs(regime_slice))) if len(regime_slice) else 0.0
-                stress = median_vol > 1e-6 and past_vol > 1.5 * median_vol
+                stress = median_vol > 1e-6 and past_vol > stress_vol_multiplier * median_vol
                 cooled_down = (i - last_sell_idx) >= cooldown_days
                 if (
                     consec_above >= confirmation_days
@@ -689,13 +707,14 @@ class BacktestEngine:
                 ):
                     signal = "buy"
 
-            if signal == "buy" and price > 1e-9 and is_cash:
-                amount = cash * self.position_size_pct
-                commission = amount * (self.commission_pct / 100.0)
-                cost = amount - commission
-                qty = cost / price
+            if signal == "buy" and price > 1e-9 and is_cash and cash > 1e-9:
+                margin = cash * self.position_size_pct
+                notional = margin * leverage
+                commission = notional * (self.commission_pct / 100.0)
+                qty = (notional - commission) / price
                 if qty > 0:
-                    cash -= amount
+                    cash -= margin
+                    borrowed = notional - margin
                     shares = qty
                     entry_price = price
                     entry_idx = i
@@ -716,9 +735,12 @@ class BacktestEngine:
             elif signal == "sell" and price > 1e-9 and is_long:
                 gross = shares * price
                 commission = gross * (self.commission_pct / 100.0)
-                cash += gross - commission
+                cash += gross - commission - borrowed
+                if cash < 0:
+                    cash = 0.0
                 qty = shares
                 shares = 0.0
+                borrowed = 0.0
                 entry_price = None
                 entry_idx = None
                 peak_price = None
@@ -736,7 +758,38 @@ class BacktestEngine:
                     )
                 )
 
-            equity_curve[i] = cash + shares * price
+            if shares > 1e-9 and position_equity(price) <= 0.0:
+                gross = shares * price
+                commission = gross * (self.commission_pct / 100.0)
+                cash += gross - commission - borrowed
+                if cash < 0:
+                    cash = 0.0
+                qty = shares
+                shares = 0.0
+                borrowed = 0.0
+                entry_price = None
+                entry_idx = None
+                peak_price = None
+                last_sell_idx = i
+                margin_call_count += 1
+                trades.append(
+                    Trade(
+                        date_idx=i,
+                        date=dates[i] if i < len(dates) else i,
+                        side="sell",
+                        price=price,
+                        quantity=qty,
+                        commission=commission,
+                        cash_after=cash,
+                        shares_after=0.0,
+                    )
+                )
+
+            if account_wiped_idx is None and abs(shares) < 1e-9 and cash <= 1e-6:
+                account_wiped_idx = i
+                account_wiped_date = dates[i] if i < len(dates) else i
+
+            equity_curve[i] = max(0.0, total_equity(price))
 
         return BacktestResult(
             equity_curve=equity_curve,
@@ -746,4 +799,7 @@ class BacktestEngine:
             dates=dates,
             entry_thresholds=entry_thr_curve,
             exit_thresholds=exit_thr_curve,
+            margin_call_count=margin_call_count,
+            account_wiped_at_idx=account_wiped_idx,
+            account_wiped_at_date=account_wiped_date,
         )

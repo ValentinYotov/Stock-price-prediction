@@ -191,6 +191,7 @@ def run_backtest_for_ticker(
     sentiment_df: pd.DataFrame | None = None,
     start_date=None,
     end_date=None,
+    leverage: float = 1.0,
 ):
     ticker_df = raw_df[raw_df["symbol"] == ticker]
     if len(ticker_df) < 200:
@@ -281,6 +282,7 @@ def run_backtest_for_ticker(
         prices=prices,
         predicted_returns=predicted_returns,
         dates=dates,
+        leverage=leverage,
     )
     metrics = compute_metrics(
         result,
@@ -306,6 +308,9 @@ def run_backtest_for_ticker(
         "buy_signal_pct": 100 * buy_signals / len(prices),
         "directional_acc_pct": 100 * directional_acc,
         "in_training_set": ticker in set(config.data.tickers),
+        "leverage": leverage,
+        "margin_call_count": result.margin_call_count,
+        "account_wiped_at_date": result.account_wiped_at_date,
     }
 
 
@@ -605,6 +610,27 @@ with st.sidebar:
         step=0.05,
         help="Round-trip commission per trade (industry typical: 0.05% - 0.20%).",
     )
+    leverage = st.slider(
+        "Leverage (x)",
+        min_value=1.0,
+        max_value=50.0,
+        value=1.0,
+        step=0.5,
+        help=(
+            "Borrowing multiplier on each position. 1x = no leverage. "
+            "Higher leverage amplifies both gains and losses on the position. "
+            "If a position's equity drops to zero, only that position is "
+            "margin-called (you lose the committed margin); the rest of the "
+            "cash stays free for the next trade. Trading stops only when the "
+            "entire account is wiped out."
+        ),
+    )
+    if leverage > 1.0:
+        margin_wipe_pct = 100.0 / leverage
+        st.caption(
+            f":zap: At {leverage:g}x leverage, a {margin_wipe_pct:.1f}% adverse move on a "
+            f"position loses the committed margin ({position_size_pct*100:.0f}% of cash)."
+        )
 
     st.markdown("---")
     run = st.button(
@@ -629,24 +655,24 @@ st.markdown(
 with st.expander("How the trading strategy decides — click to expand", expanded=False):
     st.markdown(
         """
-**Smart long-only strategy** (fixed, opinionated — no parameter tuning by hand).
+**Smart long-biased strategy** (fixed, opinionated — no parameter tuning by hand).
 
 Every day the system:
 
-1. **Smooths the model prediction** with a 5-day exponential moving average to filter single-day noise.
+1. **Smooths the model prediction** with a 3-day exponential moving average to suppress single-day noise without lagging the signal too much.
 2. **Converts it to a risk-adjusted z-score** by dividing by the trailing 20-day realised volatility — the model's edge is measured *in units of risk*, not raw return.
-3. **Calibrates entry/exit thresholds adaptively** from each model's *own* past z-score distribution (walk-forward, no look-ahead). This way the strategy works for both base and news models even though their predictions live on different scales.
+3. **Calibrates entry/exit thresholds adaptively** from each model's *own* past z-score distribution (walk-forward, no look-ahead). The base and news models predict on different scales, so model-agnostic thresholds are essential for a fair comparison.
 4. **Enters a long position** only when *all three* hold:
-    - the z-score has been **above its top 20% threshold** for **2 consecutive days** (sustained edge, not a spike),
-    - the market is **not in a stress regime** (current volatility < 1.5× the median over the last 60 days),
-    - at least **2 days have passed** since the last sell (cooldown to avoid whipsaws).
+    - the z-score is **above the model's own median** (top 50% of its past signal),
+    - realised volatility is not in a black-swan regime (current vol < 2.5× the median over the last 30 days),
+    - at least **1 day has passed** since the last sell.
 5. **Exits** on the *first* of:
-    - **Trailing stop** — price drops 5% from the post-entry peak,
-    - **Take profit** — price is up 10% from the entry price,
-    - **Signal exit** — the z-score drops below its bottom 30% threshold (model turns bearish for itself),
-    - **Time stop** — held for 20 trading days.
+    - **Trailing stop** — price drops 6% from the post-entry peak,
+    - **Take profit** — price is up 12% from the entry price,
+    - **Signal exit** — z-score drops below its bottom 20% (the model turns relatively bearish),
+    - **Time stop** — held for 30 trading days.
 
-All calculations are **causal**: only past prices and predictions are used.
+This is intentionally **long-biased**: in bull markets the system gives up some upside to enforce risk control; in flat or bearish markets it tends to beat Buy &amp; Hold by sidestepping the worst legs. All calculations are **causal** — only past prices and predictions are used.
         """
     )
 
@@ -675,6 +701,7 @@ else:
                     commission_pct=commission_pct, risk_free_rate_annual=risk_free,
                     sentiment_df=None,
                     start_date=start_date, end_date=end_date,
+                    leverage=leverage,
                 )
                 res_news = run_backtest_for_ticker(
                     ticker=ticker, raw_df=raw_df, model=news_model["model"], config=config,
@@ -682,6 +709,7 @@ else:
                     commission_pct=commission_pct, risk_free_rate_annual=risk_free,
                     sentiment_df=sentiment_df,
                     start_date=start_date, end_date=end_date,
+                    leverage=leverage,
                 )
             st.session_state["last_pair"] = (res_base, res_news)
         except Exception as e:
@@ -708,6 +736,22 @@ else:
             f"{res_base['ticker']}  ·  {window_start} → {window_end}  "
             f"({len(res_base['prices'])} trading days){news_tag}"
         )
+
+        for label, res in [("Base", res_base), ("News", res_news)]:
+            mc = int(res.get("margin_call_count", 0))
+            wiped = res.get("account_wiped_at_date")
+            if mc > 0:
+                st.warning(
+                    f":zap: **{label} model had {mc} margin call{'s' if mc != 1 else ''}** "
+                    f"at {res['leverage']:g}x leverage (each one lost the position's margin, "
+                    f"trading continued with remaining cash)."
+                )
+            if wiped is not None:
+                wiped_date = pd.to_datetime(wiped).date()
+                st.error(
+                    f":skull: **{label} model account was fully wiped out on {wiped_date}** "
+                    f"at {res['leverage']:g}x leverage. No more capital, no further trades."
+                )
 
         bh = mb.buy_and_hold_return_pct
         c1, c2, c3 = st.columns(3)
