@@ -391,34 +391,6 @@ def plot_equity_and_drawdown(res_base, res_news):
     return fig
 
 
-def plot_predictions_dual(res_base, res_news):
-    """Actual return + base prediction + news prediction (same timeline)."""
-    dates = pd.to_datetime(res_base["dates"])
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(x=dates, y=res_base["actual_returns"],
-                   mode="lines", name="Actual log return",
-                   line=dict(color="#64748b", width=1), opacity=0.55)
-    )
-    fig.add_trace(
-        go.Scatter(x=dates, y=res_base["predicted_returns"],
-                   mode="lines", name="Base prediction",
-                   line=dict(color=COLOR_BASE, width=2))
-    )
-    fig.add_trace(
-        go.Scatter(x=dates, y=res_news["predicted_returns"],
-                   mode="lines", name="News prediction",
-                   line=dict(color=COLOR_NEWS, width=2))
-    )
-    fig.update_layout(
-        height=360, margin=dict(l=10, r=10, t=40, b=10),
-        title="Next-day predictions vs actual log return",
-        template="plotly_dark",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-    )
-    return fig
-
-
 def trades_dataframe(res) -> pd.DataFrame:
     dates = pd.to_datetime(res["dates"])
     rows = []
@@ -476,6 +448,13 @@ def load_sentiment_table():
     return load_daily_sentiment(config=load_config())
 
 
+def try_load_sentiment_table():
+    try:
+        return load_sentiment_table(), None
+    except FileNotFoundError as exc:
+        return None, str(exc)
+
+
 def plot_price_with_sentiment(res):
     """Price line with daily sentiment bars underneath (news variant)."""
     dates = pd.to_datetime(res["dates"])
@@ -511,7 +490,16 @@ model, config, model_info = load_model_and_config()
 raw_df = load_market_data()
 sim_defaults = load_sim_defaults()
 news_model = load_news_model()
-sentiment_df = load_sentiment_table() if news_model is not None else None
+sentiment_error = None
+if news_model is not None:
+    sentiment_df, sentiment_error = try_load_sentiment_table()
+else:
+    sentiment_df = None
+if news_model is not None and sentiment_df is None:
+    # The news checkpoint requires the 6 FinBERT features. Without the cached
+    # sentiment table it cannot be run safely, so disable the news comparison
+    # instead of failing during app startup.
+    news_model = None
 
 available_tickers = sorted(raw_df["symbol"].unique())
 news_syms = set(sentiment_df["symbol"].unique()) if sentiment_df is not None else set()
@@ -667,10 +655,10 @@ Every day the system:
     - realised volatility is not in a black-swan regime (current vol < 2.5× the median over the last 30 days),
     - at least **1 day has passed** since the last sell.
 5. **Exits** on the *first* of:
-    - **Trailing stop** — price drops 6% from the post-entry peak,
-    - **Take profit** — price is up 12% from the entry price,
-    - **Signal exit** — z-score drops below its bottom 20% (the model turns relatively bearish),
-    - **Time stop** — held for 30 trading days.
+    - **Trailing stop** — price drops 10% from the post-entry peak,
+    - **Signal exit** — z-score drops below its bottom 20% (the model turns relatively bearish).
+
+There is no fixed take-profit or 30-day time stop. The system lets winners keep running until the model signal weakens or price reverses materially from the peak.
 
 This is intentionally **long-biased**: in bull markets the system gives up some upside to enforce risk control; in flat or bearish markets it tends to beat Buy &amp; Hold by sidestepping the worst legs. All calculations are **causal** — only past prices and predictions are used.
         """
@@ -680,12 +668,23 @@ st.markdown("---")
 
 
 if news_model is None:
-    st.warning(
-        "News-enhanced model not found. Build it first:\n\n"
-        "1. `py -3.11 scripts/fetch_fnspid_news.py`\n"
-        "2. `py -3.11 scripts/score_news_finbert.py`\n"
-        "3. `py -3.11 scripts/train_news.py`  (creates `best_model_news.pt`)"
-    )
+    if sentiment_error:
+        st.warning(
+            "News-enhanced checkpoint exists, but the cached FinBERT sentiment table is missing.\n\n"
+            "Build it first:\n\n"
+            "1. `py -3.11 scripts/fetch_fnspid_news.py`\n"
+            "2. `py -3.11 scripts/score_news_finbert.py`\n\n"
+            "Expected output: `data/news/daily_sentiment_2015_2020.parquet`"
+        )
+        with st.expander("Technical details"):
+            st.code(sentiment_error)
+    else:
+        st.warning(
+            "News-enhanced model not found. Build it first:\n\n"
+            "1. `py -3.11 scripts/fetch_fnspid_news.py`\n"
+            "2. `py -3.11 scripts/score_news_finbert.py`\n"
+            "3. `py -3.11 scripts/train_news.py`  (creates `best_model_news.pt`)"
+        )
 else:
     if "last_pair" not in st.session_state:
         st.session_state["last_pair"] = None
@@ -790,7 +789,6 @@ else:
         )
 
         st.plotly_chart(plot_equity_and_drawdown(res_base, res_news), use_container_width=True)
-        st.plotly_chart(plot_predictions_dual(res_base, res_news), use_container_width=True)
 
         if news_days > 0:
             st.plotly_chart(plot_price_with_sentiment(res_news), use_container_width=True)

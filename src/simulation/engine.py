@@ -547,9 +547,7 @@ class BacktestEngine:
         entry_z_quantile: float = 0.50,
         exit_z_quantile: float = 0.20,
         confirmation_days: int = 1,
-        trailing_stop_pct: float = 6.0,
-        take_profit_pct: float = 12.0,
-        max_hold_days: int = 30,
+        trailing_stop_pct: float = 10.0,
         cooldown_days: int = 1,
         stress_vol_multiplier: float = 2.5,
         leverage: float = 1.0,
@@ -576,9 +574,11 @@ class BacktestEngine:
              c. ``cooldown_days`` have elapsed since the last sell.
         5. While long, exit at the close of day t on the FIRST of:
              - Trailing stop: price drops trailing_stop_pct from post-entry peak.
-             - Take profit: price up take_profit_pct from entry.
              - Signal exit: z-score drops below past ``exit_z_quantile``.
-             - Time stop: held for ``max_hold_days`` already.
+
+        There is intentionally no fixed take-profit or max-hold rule: winners
+        are allowed to keep running until the model signal weakens or price
+        reverses materially from the post-entry peak.
 
         All calculations are causal -- only past prices and predictions used.
         """
@@ -597,7 +597,6 @@ class BacktestEngine:
         regime_window = max(vol_window, int(regime_window))
         confirmation_days = max(1, int(confirmation_days))
         cooldown_days = max(0, int(cooldown_days))
-        max_hold_days = max(1, int(max_hold_days))
         leverage = max(1.0, float(leverage))
 
         if smoothing_span > 1:
@@ -631,7 +630,6 @@ class BacktestEngine:
         consec_above = 0
         last_sell_idx = -10_000
         entry_price: Optional[float] = None
-        entry_idx: Optional[int] = None
         peak_price: Optional[float] = None
         margin_call_count = 0
         account_wiped_idx: Optional[int] = None
@@ -680,19 +678,13 @@ class BacktestEngine:
 
             signal = "hold"
             if is_long:
-                if entry_price is not None and peak_price is not None and entry_idx is not None:
+                if entry_price is not None and peak_price is not None:
                     peak_price = max(peak_price, price)
                     drop_from_peak_pct = 100.0 * (price - peak_price) / peak_price
-                    gain_from_entry_pct = 100.0 * (price - entry_price) / entry_price
-                    held_days = i - entry_idx
 
                     if drop_from_peak_pct <= -trailing_stop_pct:
                         signal = "sell"
-                    elif gain_from_entry_pct >= take_profit_pct:
-                        signal = "sell"
                     elif z_score <= exit_z_thr:
-                        signal = "sell"
-                    elif held_days >= max_hold_days:
                         signal = "sell"
 
             elif is_cash:
@@ -717,7 +709,6 @@ class BacktestEngine:
                     borrowed = notional - margin
                     shares = qty
                     entry_price = price
-                    entry_idx = i
                     peak_price = price
                     consec_above = 0
                     trades.append(
@@ -742,7 +733,6 @@ class BacktestEngine:
                 shares = 0.0
                 borrowed = 0.0
                 entry_price = None
-                entry_idx = None
                 peak_price = None
                 last_sell_idx = i
                 trades.append(
@@ -768,7 +758,6 @@ class BacktestEngine:
                 shares = 0.0
                 borrowed = 0.0
                 entry_price = None
-                entry_idx = None
                 peak_price = None
                 last_sell_idx = i
                 margin_call_count += 1

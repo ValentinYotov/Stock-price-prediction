@@ -1,4 +1,4 @@
-# Default Configuration File — thesis base model (technical only)
+
 
 data:
   dataset_name: "pmoe7/SP_500_Stocks_Data-ratios_news_price_10_yrs"
@@ -8,7 +8,7 @@ data:
   context_length: 60
   prediction_horizon: 1
 
-  # Fixed thesis universe (same tickers for base model and later news experiments)
+
   tickers:
     - "AAPL"
     - "MSFT"
@@ -33,11 +33,11 @@ data:
   start_date: "2015-01-01"
   end_date: null
 
-  # per_symbol: split train/val/test by time within each ticker (no cross-ticker leakage)
+
   split_mode: "per_symbol"
   target_column: "log_return"
   price_column: "close"
-  # Set to e.g. "AAPL" to train/evaluate on a single hero ticker only; null = all tickers above
+ 
   hero_ticker: null
 
   features:
@@ -89,7 +89,7 @@ simulation:
   position_size_pct: 0.3
   entry_threshold_pct: 0.5
   exit_threshold_pct: -5.0
-  # Log-return thresholds for backtest when target_column is log_return
+
   entry_threshold_return: 0.005
   exit_threshold_return: -0.005
   commission_pct: 0.1
