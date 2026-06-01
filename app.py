@@ -633,36 +633,6 @@ risk_free = float(sim_defaults.get("risk_free_rate_annual", 0.03))
 
 
 st.title("📈  Stock Forecasting — base vs news model")
-st.markdown(
-    "<div class='small-note'>The same Transformer trained on 2015-2020, compared with and without "
-    "6 FinBERT daily-sentiment features. Each run backtests <b>both models on the same ticker and "
-    "period</b> against Buy &amp; Hold.</div>",
-    unsafe_allow_html=True,
-)
-
-with st.expander("How the trading strategy decides — click to expand", expanded=False):
-    st.markdown(
-        """
-**Smart long-biased strategy** (fixed, opinionated — no parameter tuning by hand).
-
-Every day the system:
-
-1. **Smooths the model prediction** with a 3-day exponential moving average to suppress single-day noise without lagging the signal too much.
-2. **Converts it to a risk-adjusted z-score** by dividing by the trailing 20-day realised volatility — the model's edge is measured *in units of risk*, not raw return.
-3. **Calibrates entry/exit thresholds adaptively** from each model's *own* past z-score distribution (walk-forward, no look-ahead). The base and news models predict on different scales, so model-agnostic thresholds are essential for a fair comparison.
-4. **Enters a long position** only when *all three* hold:
-    - the z-score is **above the model's own median** (top 50% of its past signal),
-    - realised volatility is not in a black-swan regime (current vol < 2.5× the median over the last 30 days),
-    - at least **1 day has passed** since the last sell.
-5. **Exits** on the *first* of:
-    - **Trailing stop** — price drops 10% from the post-entry peak,
-    - **Signal exit** — z-score drops below its bottom 20% (the model turns relatively bearish).
-
-There is no fixed take-profit or 30-day time stop. The system lets winners keep running until the model signal weakens or price reverses materially from the peak.
-
-This is intentionally **long-biased**: in bull markets the system gives up some upside to enforce risk control; in flat or bearish markets it tends to beat Buy &amp; Hold by sidestepping the worst legs. All calculations are **causal** — only past prices and predictions are used.
-        """
-    )
 
 st.markdown("---")
 
